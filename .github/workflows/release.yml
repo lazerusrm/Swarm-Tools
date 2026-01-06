@@ -45,9 +45,27 @@ jobs:
           path: target/x86_64-pc-windows-msvc/release/precompact.exe
           retention-days: 1
 
+  build-macos:
+    name: Build macOS x64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          target: x86_64-apple-darwin
+      - name: Build release
+        run: cargo build --release --target x86_64-apple-darwin
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: swarm-tools-macos-x64
+          path: target/x86_64-apple-darwin/release/precompact
+          retention-days: 1
+
   create-release:
     name: Create GitHub Release
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Download Linux binary
@@ -60,12 +78,17 @@ jobs:
         with:
           name: swarm-tools-windows-x64.exe
           path: release
+      - name: Download macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: swarm-tools-macos-x64
+          path: release
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: release/*
           generate_release_notes: |
-            ## Swarm-Tools Rust v1.0.0
+            ## Swarm-Tools Rust v1.0.2
 
             Multi-platform release with all performance optimizations.
 
@@ -74,8 +97,11 @@ jobs:
             - **Codified Reasoning**: Structured JSON planning (15-25% token reduction)
             - **Trajectory Compression**: Selective compression (25-40% reduction)
             - **Self-Resource Allocation**: Contribution-based budget (10-20% savings)
+            - **MCP/Tool Routing**: Role-based tool filtering
+            - **Auto-Model Tiering**: Haiku/Sonnet/Opus routing
+            - **Self-Healing Topology**: Auto-pruning with safety floors
 
-            ### Combined Expected: 60-80% token reduction
+            ### Combined Expected: 80-110% token reduction
 
             Based on research from:
             - RCR-Router (Aug 2025)
