@@ -193,7 +193,7 @@ impl SemanticEngine {
                 match ureq::get(url).call() {
                     Ok(response) => {
                         let mut file = fs::File::create(&filepath)?;
-                        let reader = response.into_reader();
+                        let mut reader = response.into_reader();
                         let mut buffer = [0u8; 8192];
                         loop {
                             match reader.read(&mut buffer)? {

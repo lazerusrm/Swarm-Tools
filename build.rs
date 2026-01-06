@@ -83,81 +83,21 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 }
 
-fn download_file(url: &str, path: &PathBuf) -> Result<(), std::io::Error> {
+fn download_file(url: &str, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()?;
 
     let response = client.get(url).send()?;
     if !response.status().is_success() {
-        return Err(std::io::Error::new(
+        return Err(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             format!("HTTP error: {}", response.status()),
-        ));
+        )));
     }
 
     let mut file = std::fs::File::create(path)?;
     let content = response.bytes()?;
     std::io::Write::write_all(&mut file, &content)?;
     Ok(())
-}
-
-    // Download tokenizer if not present
-    let tokenizer_url =
-        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json";
-    let tokenizer_path = models_dir.join("tokenizer.json");
-
-    if !tokenizer_path.exists() {
-        println!("Downloading tokenizer.json...");
-        download_file(tokenizer_url, &tokenizer_path);
-        println!("Downloaded tokenizer.json");
-    }
-
-    // Download config.json
-    let config_url =
-        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json";
-    let config_path = models_dir.join("config.json");
-
-    if !config_path.exists() {
-        println!("Downloading config.json...");
-        download_file(config_url, &config_path);
-        println!("Downloaded config.json");
-    }
-
-    // Download ONNX model
-    let onnx_url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx";
-    let onnx_path = models_dir.join("model.onnx");
-
-    if !onnx_path.exists() {
-        println!("Downloading ONNX model (this may take a moment)...");
-        download_file(onnx_url, &onnx_path);
-        println!("Downloaded ONNX model");
-    }
-
-    // On Windows, download ONNX Runtime DLL
-    #[cfg(windows)]
-    {
-        let ort_dll_url = "https://cdn.pyke.io/onnxruntime-win-x64-1.20.0/onnxruntime.dll";
-        let ort_dll_path = models_dir.join("onnxruntime.dll");
-
-        if !ort_dll_path.exists() {
-            println!("Downloading ONNX Runtime DLL for Windows...");
-            download_file(ort_dll_url, &ort_dll_path);
-            println!("Downloaded ONNX Runtime DLL");
-        }
-    }
-
-    // Print location for debugging
-    println!("Model files in: {:?}", models_dir);
-
-    // Tell Cargo to rerun this script if these files change
-    println!("cargo:rerun-if-changed=build.rs");
-}
-
-fn download_file(url: &str, path: &PathBuf) {
-    let response = reqwest::blocking::get(url).expect(&format!("Failed to download {}", url));
-    let mut file =
-        std::fs::File::create(path).expect(&format!("Failed to create {}", path.display()));
-    let mut content = response.bytes().expect("Failed to read response");
-    std::io::Write::write_all(&mut file, &mut content).expect("Failed to write file");
 }
