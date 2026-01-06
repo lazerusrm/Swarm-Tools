@@ -3,9 +3,9 @@ name = "swarm-tools"
 version = "1.0.0"
 edition = "2021"
 authors = ["Swarm Tools Contributors"]
-description = "Autonomous swarm optimization tools - pure Rust implementation with semantic embeddings"
+description = "Autonomous swarm optimization tools - pure Rust implementation for loop detection, cost-benefit analysis, and team optimization"
 license = "MIT"
-repository = "https://github.com/your-username/swarm-tools"
+repository = "https://github.com/lazerusrm/Swarm-Tools"
 keywords = ["swarm", "autonomous", "agents", "optimization", "embedding"]
 categories = ["development-tools", "algorithms"]
 

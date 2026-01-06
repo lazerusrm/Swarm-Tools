@@ -115,3 +115,17 @@ Backed by 2025 research breakthroughs:
 Issues, PRs, and real-world benchmarks welcome.
 
 MIT © lazerusrm
+
+---
+
+## Attribution
+
+This project uses the following open-source components:
+
+### Semantic Embedding Model
+
+- **Model**: [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) by Sentence Transformers
+- **License**: Apache-2.0
+- **Purpose**: 384-dimensional sentence embeddings for semantic task routing
+
+The model is downloaded automatically during build from Hugging Face. See the [model card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) for details.
