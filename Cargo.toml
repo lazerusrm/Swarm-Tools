@@ -34,10 +34,10 @@ ort = { version = "2.0.0-rc.10", default-features = false, optional = true }
 [features]
 default = ["semantic", "dep:ort"]
 # semantic: Enable semantic embedding engine
-# ort: Enable ONNX Runtime for BERT embeddings (requires system libs or DLL)
+# ort: Enable ONNX Runtime for BERT embeddings
 semantic = ["dep:tokenizers", "dep:ort"]
 
-# CI build - disable ONNX Runtime to avoid download issues
+# CI build - disable ONNX Runtime to avoid download timeouts
 # Use --features semantic (without ort) for tokenizer-only mode
 ci = []
 

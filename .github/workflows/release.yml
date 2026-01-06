@@ -20,8 +20,10 @@ jobs:
           target: x86_64-unknown-linux-gnu
       - name: Build release
         run: cargo build --release --target x86_64-unknown-linux-gnu --features semantic
+      - name: List artifacts
+        run: ls -la target/x86_64-unknown-linux-gnu/release/
       - name: Upload binary
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: swarm-tools-linux
           path: target/x86_64-unknown-linux-gnu/release/swarm-tools
@@ -38,29 +40,13 @@ jobs:
           target: x86_64-pc-windows-msvc
       - name: Build release
         run: cargo build --release --target x86_64-pc-windows-msvc --features semantic
-      - name: Upload binary
-        uses: actions/upload-artifact@v3
-        with:
-          name: swarm-tools-windows
-          path: target/x86_64-pc-windows-msvc/release/swarm-tools.exe
-          retention-days: 1
-
-  build-macos:
-    name: Build macOS
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          target: x86_64-apple-darwin
-      - name: Build release
-        run: cargo build --release --target x86_64-apple-darwin
+      - name: List artifacts
+        run: dir target\x86_64-pc-windows-msvc\release\
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: swarm-tools-macos
-          path: target/x86_64-apple-darwin/release/swarm-tools
+          name: swarm-tools-windows
+          path: target/x86_64-pc-windows-msvc/release/swarm-tools.exe
           retention-days: 1
 
   create-release:
@@ -69,15 +55,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Linux binary
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: swarm-tools-linux
           path: release
       - name: Download Windows binary
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: swarm-tools-windows
           path: release
+      - name: List downloaded files
+        run: ls -la release/
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -90,9 +78,8 @@ jobs:
             ### Platforms
             - **Linux**: ✓ Full semantic engine with BERT embeddings
             - **Windows**: ✓ Full semantic engine with BERT embeddings
-            - **macOS**: Basic binary (semantic features pending CI fix)
 
-            ### Semantic Task Routing (NEW)
+            ### Semantic Task Routing
             - **BERT embeddings**: ML-powered intelligent task-to-role routing
             - **Cross-platform**: ONNX inference on Linux, runtime DLL on Windows
             - **Graceful fallback**: Tokenizer-based and TF-IDF embeddings
