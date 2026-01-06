@@ -2,12 +2,24 @@ use crate::types::AgentRole;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Configuration for role-based context filtering.
+///
+/// Contains keywords, filters, and recency settings specific to each agent role.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleConfig {
+    /// The agent role this config applies to.
     pub role: AgentRole,
+    /// List of content filters for this role.
     pub filters: Vec<String>,
+    /// Keywords that indicate relevance for this role.
     pub keywords: Vec<String>,
+    /// Maximum multiplier for recency scoring (last 10% of messages get up to this multiplier).
+    #[serde(default = "default_recency_multiplier")]
     pub recency_multiplier_max: f64,
+}
+
+fn default_recency_multiplier() -> f64 {
+    2.0
 }
 
 impl Default for RoleConfig {
@@ -21,31 +33,61 @@ impl Default for RoleConfig {
     }
 }
 
+/// Result of role-based context filtering.
+///
+/// Contains relevance scores and filtered content for each message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleContext {
+    /// The agent role this context was filtered for.
     pub role: AgentRole,
+    /// Individual relevance scores for each message.
     pub relevance_scores: Vec<f64>,
+    /// Filtered content items with metadata.
     pub filtered_content: Vec<FilteredContent>,
+    /// Sum of all relevance scores.
     pub total_relevance: f64,
 }
 
+/// A single piece of filtered content with its relevance metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilteredContent {
+    /// Original index in the message sequence.
     pub original_index: usize,
+    /// The filtered content text.
     pub content: String,
+    /// Calculated relevance score (0.0 to 1.0).
     pub relevance_score: f64,
+    /// Whether this content is in the last 10% (recent) messages.
     pub is_recent: bool,
+    /// Impact score for this content.
     pub impact_score: f64,
 }
 
+/// Router for filtering context based on agent roles.
+///
+/// Uses keyword matching, position-based recency weighting, and impact scores
+/// to determine which messages are most relevant for a given agent role.
+/// Based on RCR-Router (Aug 2025) for 40-65% communication savings.
 #[derive(Debug, Clone)]
 pub struct RoleRouter {
+    /// Role-specific configurations.
     role_configs: HashMap<AgentRole, RoleConfig>,
+    /// Custom role configurations by name.
     custom_configs: HashMap<String, RoleConfig>,
+    /// Default filters for each role.
     default_filters: HashMap<AgentRole, Vec<String>>,
 }
 
 impl RoleRouter {
+    /// Creates a new RoleRouter with default configurations for all agent roles.
+    ///
+    /// Initializes role-specific filters based on typical responsibilities:
+    /// - Extractor: file_deltas, git_diff, changed_files
+    /// - Analyzer: metrics, patterns, analysis_results
+    /// - Writer: draft_content, updates, modifications
+    /// - Reviewer: code_changes, security_issues, quality_gate
+    /// - Synthesizer: summaries, findings, consolidations
+    /// - General: all, message, communication, update
     pub fn new() -> Self {
         let mut default_filters = HashMap::new();
         default_filters.insert(
@@ -133,6 +175,22 @@ impl RoleRouter {
         }
     }
 
+    /// Calculates a relevance score for content based on agent role.
+    ///
+    /// The score combines:
+    /// - Keyword matching (base relevance)
+    /// - Recency weighting (2.0x multiplier for last 10% of messages)
+    /// - Impact boost (30% bonus based on impact_score)
+    ///
+    /// # Arguments
+    /// * `content` - The message content to score
+    /// * `role` - The target agent role
+    /// * `position` - Position in the message sequence (0-indexed)
+    /// * `total_messages` - Total number of messages in the sequence
+    /// * `impact_score` - Importance score for this message (0.0 to 1.0)
+    ///
+    /// # Returns
+    /// A composite relevance score. Higher scores indicate greater relevance.
     pub fn score_for_role(
         &self,
         content: &str,
@@ -212,6 +270,17 @@ impl RoleRouter {
         }
     }
 
+    /// Filters and scores a sequence of messages for a specific agent role.
+    ///
+    /// Each message is scored based on role-specific keywords and recency.
+    /// Messages in the last 10% of the sequence receive up to 2.0x recency boost.
+    ///
+    /// # Arguments
+    /// * `messages` - Slice of tuples containing (content, position, impact_score)
+    /// * `role` - The target agent role for filtering
+    ///
+    /// # Returns
+    /// A RoleContext containing filtered content with relevance scores.
     pub fn filter_context(&self, messages: &[(&str, usize, f64)], role: AgentRole) -> RoleContext {
         let keywords = self.get_role_keywords(role);
         let recency_multiplier_max = self
@@ -271,10 +340,26 @@ impl RoleRouter {
         }
     }
 
+    /// Adds a custom role configuration.
+    ///
+    /// Custom configs override default filters for a specific role.
+    ///
+    /// # Arguments
+    /// * `name` - Name to identify this custom configuration
+    /// * `config` - The RoleConfig to add
     pub fn add_custom_config(&mut self, name: String, config: RoleConfig) {
         self.custom_configs.insert(name, config);
     }
 
+    /// Gets the filter keywords for a specific agent role.
+    ///
+    /// Returns custom config filters if available, otherwise default filters.
+    ///
+    /// # Arguments
+    /// * `role` - The agent role to get filters for
+    ///
+    /// # Returns
+    /// Vector of filter keywords for the specified role.
     pub fn get_role_filter(&self, role: AgentRole) -> Vec<String> {
         self.custom_configs
             .values()

@@ -87,8 +87,8 @@ pub struct EnhancedMonitor {
 
     #[allow(dead_code)]
     budget: Option<crate::types::SwarmBudget>,
-    agent_usage_history: HashMap<String, Vec<crate::types::TurnStats>>,
-    turn_counter: u32,
+    pub agent_usage_history: HashMap<String, Vec<crate::types::TurnStats>>,
+    pub turn_counter: u32,
 }
 
 impl EnhancedMonitor {
@@ -553,6 +553,10 @@ impl EnhancedMonitor {
         }
 
         success_rates
+    }
+
+    pub fn get_budget(&self) -> Option<&crate::types::SwarmBudget> {
+        self.budget.as_ref()
     }
 }
 
