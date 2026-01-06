@@ -1,0 +1,20 @@
+{
+  "name": "swarm-tools",
+  "description": "Autonomous swarm optimization tools - pure Rust implementation for loop detection, cost-benefit analysis, and team optimization",
+  "version": "1.0.0",
+  "author": {
+    "name": "Swarm Tools Contributors"
+  },
+  "capabilities": [
+    "loop_detection",
+    "cost_benefit_analysis",
+    "team_optimization",
+    "communication_optimization",
+    "parallel_execution",
+    "iterative_refinement"
+  ],
+  "hooks": {
+    "precompact": "./target/release/precompact.exe",
+    "subagentStop": "./target/release/subagent_stop.exe"
+  }
+}

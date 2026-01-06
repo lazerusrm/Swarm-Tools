@@ -1,0 +1,89 @@
+use crate::types::*;
+
+pub struct HierarchicalRanking {
+    quality_levels: Vec<QualityLevel>,
+}
+
+struct QualityLevel {
+    name: String,
+    min_score: f64,
+    max_score: f64,
+    refinement_action: String,
+}
+
+impl HierarchicalRanking {
+    pub fn new() -> Self {
+        Self {
+            quality_levels: vec![
+                QualityLevel {
+                    name: "EXCELLENT".to_string(),
+                    min_score: 90.0,
+                    max_score: 100.0,
+                    refinement_action: "none".to_string(),
+                },
+                QualityLevel {
+                    name: "GOOD".to_string(),
+                    min_score: 80.0,
+                    max_score: 89.99,
+                    refinement_action: "expand".to_string(),
+                },
+                QualityLevel {
+                    name: "ACCEPTABLE".to_string(),
+                    min_score: 70.0,
+                    max_score: 79.99,
+                    refinement_action: "clarify".to_string(),
+                },
+                QualityLevel {
+                    name: "POOR".to_string(),
+                    min_score: 60.0,
+                    max_score: 69.99,
+                    refinement_action: "focus".to_string(),
+                },
+                QualityLevel {
+                    name: "UNACCEPTABLE".to_string(),
+                    min_score: 0.0,
+                    max_score: 59.99,
+                    refinement_action: "rewrite".to_string(),
+                },
+            ],
+        }
+    }
+
+    pub fn rank_output(&self, output: &str) -> Result<HierarchicalRankingResult> {
+        let score = self.calculate_score(output)?;
+
+        for level in &self.quality_levels {
+            if score >= level.min_score && score <= level.max_score {
+                return Ok(HierarchicalRankingResult {
+                    score,
+                    quality_level: level.name.clone(),
+                    refinement_action: level.refinement_action.clone(),
+                });
+            }
+        }
+
+        Ok(HierarchicalRankingResult {
+            score,
+            quality_level: "UNKNOWN".to_string(),
+            refinement_action: "review".to_string(),
+        })
+    }
+
+    fn calculate_score(&self, output: &str) -> Result<f64> {
+        let mut score: f64 = 50.0;
+
+        if output.len() > 500 {
+            score += 10.0;
+        }
+
+        if output.contains("TODO") || output.contains("FIXME") {
+            score -= 15.0;
+        }
+
+        if output.lines().count() > 10 {
+            score += 5.0;
+        }
+
+        Ok(score.min(100.0))
+    }
+}

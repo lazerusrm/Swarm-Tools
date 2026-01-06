@@ -1,0 +1,6 @@
+{
+  "hooks": {
+    "precompact": "./target/release/precompact.exe",
+    "subagentStop": "./target/release/subagent_stop.exe"
+  }
+}
