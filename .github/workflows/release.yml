@@ -14,12 +14,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           target: x86_64-unknown-linux-gnu
       - name: Build release
-        run: cargo build --release --target x86_64-unknown-linux-gnu --features semantic
+        run: |
+          export CARGO_BUILD_JOBS=1
+          cargo build --release --target x86_64-unknown-linux-gnu --features semantic
+      - name: Check memory
+        run: free -h
       - name: List build artifacts
         run: |
           ls -la target/x86_64-unknown-linux-gnu/release/ | head -20
@@ -36,12 +54,30 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           target: x86_64-pc-windows-msvc
       - name: Build release
-        run: cargo build --release --target x86_64-pc-windows-msvc --features semantic
+        run: |
+          $env:CARGO_BUILD_JOBS = "1"
+          cargo build --release --target x86_64-pc-windows-msvc --features semantic
+      - name: Check memory
+        run: wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /Value
       - name: List artifacts
         run: dir target\x86_64-pc-windows-msvc\release\
       - name: Upload binary
@@ -61,11 +97,13 @@ jobs:
         with:
           name: swarm-tools-linux
           path: release
+        continue-on-error: true
       - name: Download Windows binary
         uses: actions/download-artifact@v4.1.2
         with:
           name: swarm-tools-windows
           path: release
+        continue-on-error: true
       - name: List downloaded files
         run: ls -la release/
       - name: Create Release
