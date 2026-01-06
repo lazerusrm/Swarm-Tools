@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-#[cfg(feature = "semantic")]
+#[cfg(all(feature = "semantic", feature = "ort"))]
 use ort::session::Session;
 
 #[cfg(feature = "semantic")]
@@ -15,7 +15,7 @@ pub const DEFAULT_EMBEDDING_DIM: usize = 384;
 
 #[derive(Debug, Clone)]
 pub struct SemanticEngine {
-    #[cfg(feature = "semantic")]
+    #[cfg(all(feature = "semantic", feature = "ort"))]
     session: Option<Arc<Mutex<Session>>>,
     #[cfg(feature = "semantic")]
     tokenizer: Option<Tokenizer>,
@@ -63,7 +63,7 @@ impl SemanticEngine {
 
     pub fn with_path(model_path: PathBuf) -> Self {
         Self {
-            #[cfg(feature = "semantic")]
+            #[cfg(all(feature = "semantic", feature = "ort"))]
             session: None,
             #[cfg(feature = "semantic")]
             tokenizer: None,
@@ -93,73 +93,96 @@ impl SemanticEngine {
                 }
             }
 
-            // Try to load ONNX model
-            let onnx_path = self.model_path.join("model.onnx");
-            if onnx_path.exists() {
-                #[cfg(windows)]
-                {
-                    // On Windows, use load-dynamic to load ONNX Runtime DLL at runtime
-                    let ort_dll_path = self.model_path.join("onnxruntime.dll");
-                    if ort_dll_path.exists() {
-                        if ort::init_from(ort_dll_path.to_string_lossy().as_ref())
-                            .commit()
-                            .is_ok()
-                        {
-                            match Session::builder() {
-                                Ok(session_builder) => {
-                                    match session_builder.commit_from_file(&onnx_path) {
-                                        Ok(inference_session) => {
-                                            self.session =
-                                                Some(Arc::new(Mutex::new(inference_session)));
-                                            self.fallback_enabled = false;
-                                            self.use_fallback = false;
-                                            eprintln!("[SEMANTIC] Loaded ONNX embedding model (Windows runtime DLL)");
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Warning: Could not load ONNX model: {}", e);
-                                            self.enable_fallback();
+            // Try to load ONNX model (only when ort feature is enabled)
+            #[cfg(feature = "ort")]
+            {
+                let onnx_path = self.model_path.join("model.onnx");
+                if onnx_path.exists() {
+                    #[cfg(windows)]
+                    {
+                        // On Windows, use load-dynamic to load ONNX Runtime DLL at runtime
+                        let ort_dll_path = self.model_path.join("onnxruntime.dll");
+                        if ort_dll_path.exists() {
+                            if ort::init_from(ort_dll_path.to_string_lossy().as_ref())
+                                .commit()
+                                .is_ok()
+                            {
+                                match Session::builder() {
+                                    Ok(session_builder) => {
+                                        match session_builder.commit_from_file(&onnx_path) {
+                                            Ok(inference_session) => {
+                                                self.session =
+                                                    Some(Arc::new(Mutex::new(inference_session)));
+                                                self.fallback_enabled = false;
+                                                self.use_fallback = false;
+                                                eprintln!("[SEMANTIC] Loaded ONNX embedding model (Windows runtime DLL)");
+                                            }
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "Warning: Could not load ONNX model: {}",
+                                                    e
+                                                );
+                                                self.enable_fallback();
+                                            }
                                         }
                                     }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Warning: Could not create session builder: {}",
+                                            e
+                                        );
+                                        self.enable_fallback();
+                                    }
                                 }
-                                Err(e) => {
-                                    eprintln!("Warning: Could not create session builder: {}", e);
-                                    self.enable_fallback();
-                                }
-                            }
-                        } else {
-                            eprintln!("Warning: Could not initialize ONNX Runtime");
-                            self.enable_fallback();
-                        }
-                    } else {
-                        eprintln!("Warning: onnxruntime.dll not found at {:?}", ort_dll_path);
-                        self.enable_fallback();
-                    }
-                }
-
-                #[cfg(not(windows))]
-                {
-                    match Session::builder() {
-                        Ok(session_builder) => match session_builder.commit_from_file(&onnx_path) {
-                            Ok(inference_session) => {
-                                self.session = Some(Arc::new(Mutex::new(inference_session)));
-                                self.fallback_enabled = false;
-                                self.use_fallback = false;
-                                eprintln!("[SEMANTIC] Loaded ONNX embedding model");
-                            }
-                            Err(e) => {
-                                eprintln!("Warning: Could not load ONNX model: {}", e);
+                            } else {
+                                eprintln!("Warning: Could not initialize ONNX Runtime");
                                 self.enable_fallback();
                             }
-                        },
-                        Err(e) => {
-                            eprintln!("Warning: Could not create session builder: {}", e);
+                        } else {
+                            eprintln!("Warning: onnxruntime.dll not found at {:?}", ort_dll_path);
                             self.enable_fallback();
                         }
                     }
+
+                    #[cfg(not(windows))]
+                    {
+                        match Session::builder() {
+                            Ok(session_builder) => match session_builder
+                                .commit_from_file(&onnx_path)
+                            {
+                                Ok(inference_session) => {
+                                    self.session = Some(Arc::new(Mutex::new(inference_session)));
+                                    self.fallback_enabled = false;
+                                    self.use_fallback = false;
+                                    eprintln!("[SEMANTIC] Loaded ONNX embedding model");
+                                }
+                                Err(e) => {
+                                    eprintln!("Warning: Could not load ONNX model: {}", e);
+                                    self.enable_fallback();
+                                }
+                            },
+                            Err(e) => {
+                                eprintln!("Warning: Could not create session builder: {}", e);
+                                self.enable_fallback();
+                            }
+                        }
+                    }
+                } else {
+                    eprintln!("Warning: model.onnx not found at {:?}", onnx_path);
+                    self.enable_fallback();
                 }
-            } else {
-                eprintln!("Warning: model.onnx not found at {:?}", onnx_path);
-                self.enable_fallback();
+            }
+
+            // When ort is not available, use tokenizer fallback
+            #[cfg(all(feature = "semantic", not(feature = "ort")))]
+            {
+                if self.tokenizer.is_some() {
+                    eprintln!(
+                        "[SEMANTIC] Using tokenizer-based embeddings (ONNX Runtime not available)"
+                    );
+                } else {
+                    self.enable_fallback();
+                }
             }
         }
 
@@ -214,9 +237,13 @@ impl SemanticEngine {
     }
 
     pub fn is_loaded(&self) -> bool {
-        #[cfg(all(feature = "semantic"))]
+        #[cfg(all(feature = "semantic", feature = "ort"))]
         {
             self.session.is_some() || self.tokenizer.is_some()
+        }
+        #[cfg(all(feature = "semantic", not(feature = "ort")))]
+        {
+            self.tokenizer.is_some()
         }
         #[cfg(not(feature = "semantic"))]
         {
@@ -242,17 +269,17 @@ impl SemanticEngine {
             return self.embed_fallback(text);
         }
 
-        #[cfg(feature = "semantic")]
+        #[cfg(all(feature = "semantic", feature = "ort"))]
         {
             self.embed_onnx(text)
         }
-        #[cfg(not(feature = "semantic"))]
+        #[cfg(any(not(feature = "semantic"), not(feature = "ort")))]
         {
-            self.embed_fallback(text)
+            self.embed_tokenized(text)
         }
     }
 
-    #[cfg(feature = "semantic")]
+    #[cfg(all(feature = "semantic", feature = "ort"))]
     fn embed_onnx(&self, text: &str) -> Result<Vec<f32>> {
         use ndarray::Array;
 

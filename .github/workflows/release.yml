@@ -19,7 +19,7 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
       - name: Build release
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo build --release --target x86_64-unknown-linux-gnu --features semantic
       - name: Rename binary
         run: mv target/x86_64-unknown-linux-gnu/release/precompact target/x86_64-unknown-linux-gnu/release/swarm-tools
       - name: Upload binary
@@ -39,9 +39,12 @@ jobs:
         with:
           target: x86_64-pc-windows-msvc
       - name: Build release
-        run: cargo build --release --target x86_64-pc-windows-msvc
+        run: cargo build --release --target x86_64-pc-windows-msvc --features semantic
       - name: Rename binary
-        run: Move-Item -Path target/x86_64-pc-windows-msvc/release/precompact.exe -Destination target/x86_64-pc-windows-msvc/release/swarm-tools.exe
+        run: |
+          if (Test-Path "target/x86_64-pc-windows-msvc/release/precompact.exe") {
+            Move-Item -Path "target/x86_64-pc-windows-msvc/release/precompact.exe" -Destination "target/x86_64-pc-windows-msvc/release/swarm-tools.exe" -Force
+          }
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -59,7 +62,7 @@ jobs:
         with:
           target: x86_64-apple-darwin
       - name: Build release
-        run: cargo build --release --target x86_64-apple-darwin
+        run: cargo build --release --target x86_64-apple-darwin --features semantic
       - name: Rename binary
         run: mv target/x86_64-apple-darwin/release/precompact target/x86_64-apple-darwin/release/swarm-tools
       - name: Upload binary
