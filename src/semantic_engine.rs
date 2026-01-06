@@ -77,7 +77,10 @@ impl SemanticEngine {
     pub fn initialize(&mut self) -> Result<()> {
         #[cfg(feature = "semantic")]
         {
-            // First, try to load tokenizer
+            // First, ensure model files exist (download if needed)
+            self.ensure_models_exist()?;
+
+            // Try to load tokenizer
             let tokenizer_path = self.model_path.join("tokenizer.json");
             if tokenizer_path.exists() {
                 match Tokenizer::from_file(&tokenizer_path) {
@@ -163,6 +166,48 @@ impl SemanticEngine {
         #[cfg(not(feature = "semantic"))]
         {
             self.use_fallback = true;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "semantic")]
+    fn ensure_models_exist(&self) -> Result<()> {
+        use std::fs;
+        use std::io::Write;
+
+        let model_files = [
+            ("tokenizer.json", "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json"),
+            ("config.json", "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json"),
+            ("model.onnx", "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"),
+        ];
+
+        if !self.model_path.exists() {
+            fs::create_dir_all(&self.model_path)?;
+        }
+
+        for (filename, url) in model_files {
+            let filepath = self.model_path.join(filename);
+            if !filepath.exists() {
+                eprintln!("[SEMANTIC] Downloading {}...", filename);
+                match ureq::get(url).call() {
+                    Ok(response) => {
+                        let mut file = fs::File::create(&filepath)?;
+                        let reader = response.into_reader();
+                        let mut buffer = [0u8; 8192];
+                        loop {
+                            match reader.read(&mut buffer)? {
+                                0 => break,
+                                n => file.write_all(&buffer[..n])?,
+                            }
+                        }
+                        eprintln!("[SEMANTIC] Downloaded {}", filename);
+                    }
+                    Err(e) => {
+                        eprintln!("[SEMANTIC] Warning: Could not download {}: {}", filename, e);
+                    }
+                }
+            }
         }
 
         Ok(())

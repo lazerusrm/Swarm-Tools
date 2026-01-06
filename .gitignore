@@ -2,6 +2,9 @@
 target/
 Cargo.lock
 
+# Model files (downloaded during build)
+models/
+
 # IDE
 .idea/
 .vscode/
@@ -16,3 +19,6 @@ Thumbs.db
 
 # Test outputs
 test_*.json
+
+# Claude Code
+.claude/

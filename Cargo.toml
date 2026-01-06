@@ -26,6 +26,7 @@ sha2 = "0.10.9"
 tokenizers = { version = "0.19", optional = true }
 ndarray = "0.16"
 lazy_static = "1.5"
+ureq = { version = "2.9", default-features = false }
 
 [features]
 default = ["semantic"]
