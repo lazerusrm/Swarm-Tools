@@ -1,3 +1,4 @@
+use crate::config::CostBenefitWeightsConfig;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -45,12 +46,16 @@ struct History {
 
 impl CostBenefitAnalyzer {
     pub fn new() -> Self {
+        Self::with_config(CostBenefitWeightsConfig::default())
+    }
+
+    pub fn with_config(config: CostBenefitWeightsConfig) -> Self {
         Self {
             weights: Weights {
-                tokens: 1.0,
-                time: 0.5,
-                accuracy: 2.0,
-                completion: 2.0,
+                tokens: config.tokens_weight,
+                time: config.time_weight,
+                accuracy: config.quality_weight,
+                completion: config.contribution_weight,
                 information: 1.5,
                 strategy: 1.0,
             },

@@ -1,3 +1,4 @@
+use crate::config::CommunicationPatternsConfig;
 use crate::role_router::{RoleContext, RoleRouter};
 use crate::types::*;
 use regex::Regex;
@@ -24,30 +25,26 @@ impl CommunicationAnalyzer {
     /// - Acknowledgments ("ok", "understood", "acknowledged")
     /// - Low-value content ("as requested", "will do", "planning to")
     pub fn new() -> Result<Self> {
+        Self::with_config(CommunicationPatternsConfig::default())
+    }
+
+    /// Creates a new CommunicationAnalyzer with custom patterns from config.
+    pub fn with_config(config: CommunicationPatternsConfig) -> Result<Self> {
+        let redundancy_patterns: Result<Vec<(Regex, f64)>> = config
+            .redundancy_patterns
+            .into_iter()
+            .map(|p| Ok((Regex::new(&p.pattern)?, p.weight)))
+            .collect();
+
+        let irrelevance_patterns: Result<Vec<(Regex, f64)>> = config
+            .irrelevance_patterns
+            .into_iter()
+            .map(|p| Ok((Regex::new(&p.pattern)?, p.weight)))
+            .collect();
+
         Ok(Self {
-            redundancy_patterns: vec![
-                (
-                    Regex::new(r"status:\s*working|in progress|proceeding")?,
-                    0.9,
-                ),
-                (
-                    Regex::new(r"i am|i'm (working|proceeding|continuing)")?,
-                    0.8,
-                ),
-                (Regex::new(r"continuing|proceeding with (task|work)")?, 0.7),
-                (Regex::new(r"same (as|above|previous)")?, 0.8),
-                (Regex::new(r"duplicate|duplicate copy|copy of")?, 0.9),
-                (Regex::new(r"already (done|completed|finished)")?, 0.85),
-                (Regex::new(r"no (change|updates|new information)")?, 0.9),
-                (Regex::new(r"nothing (new|to report|additional)")?, 0.9),
-            ],
-            irrelevance_patterns: vec![
-                (Regex::new(r"acknowledged|ack|ok|understood|got it")?, 0.95),
-                (Regex::new(r"please|kindly|thank you|thanks")?, 0.8),
-                (Regex::new(r"as requested|following instruction")?, 0.7),
-                (Regex::new(r"will do|planning to|intend to")?, 0.6),
-                (Regex::new(r"background|context|history:")?, 0.5),
-            ],
+            redundancy_patterns: redundancy_patterns?,
+            irrelevance_patterns: irrelevance_patterns?,
         })
     }
 

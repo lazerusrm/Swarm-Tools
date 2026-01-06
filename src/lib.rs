@@ -7,6 +7,7 @@ pub mod iterative_refinement;
 pub mod loop_detector;
 pub mod omac_optimizer;
 pub mod parallel_execution;
+pub mod quality_gate;
 pub mod role_router;
 pub mod team_optimizer;
 pub mod trajectory_compressor;

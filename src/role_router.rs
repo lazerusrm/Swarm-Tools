@@ -1,3 +1,4 @@
+use crate::config::RoleRouterKeywordsConfig;
 use crate::types::AgentRole;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -89,71 +90,18 @@ impl RoleRouter {
     /// - Synthesizer: summaries, findings, consolidations
     /// - General: all, message, communication, update
     pub fn new() -> Self {
+        Self::with_config(RoleRouterKeywordsConfig::default())
+    }
+
+    /// Creates a new RoleRouter with custom keywords from config.
+    pub fn with_config(config: RoleRouterKeywordsConfig) -> Self {
         let mut default_filters = HashMap::new();
-        default_filters.insert(
-            AgentRole::Extractor,
-            vec![
-                "file_deltas".to_string(),
-                "git_diff".to_string(),
-                "changed_files".to_string(),
-                "new_content".to_string(),
-                "additions".to_string(),
-                "modifications".to_string(),
-            ],
-        );
-        default_filters.insert(
-            AgentRole::Analyzer,
-            vec![
-                "metrics".to_string(),
-                "patterns".to_string(),
-                "analysis_results".to_string(),
-                "findings".to_string(),
-                "statistics".to_string(),
-                "trends".to_string(),
-            ],
-        );
-        default_filters.insert(
-            AgentRole::Writer,
-            vec![
-                "draft_content".to_string(),
-                "updates".to_string(),
-                "modifications".to_string(),
-                "revisions".to_string(),
-                "text".to_string(),
-                "documentation".to_string(),
-            ],
-        );
-        default_filters.insert(
-            AgentRole::Reviewer,
-            vec![
-                "code_changes".to_string(),
-                "security_issues".to_string(),
-                "quality_gate".to_string(),
-                "bugs".to_string(),
-                "errors".to_string(),
-                "violations".to_string(),
-            ],
-        );
-        default_filters.insert(
-            AgentRole::Synthesizer,
-            vec![
-                "summaries".to_string(),
-                "findings".to_string(),
-                "consolidations".to_string(),
-                "conclusions".to_string(),
-                "recommendations".to_string(),
-                "overview".to_string(),
-            ],
-        );
-        default_filters.insert(
-            AgentRole::General,
-            vec![
-                "all".to_string(),
-                "message".to_string(),
-                "communication".to_string(),
-                "update".to_string(),
-            ],
-        );
+        default_filters.insert(AgentRole::Extractor, config.extractor);
+        default_filters.insert(AgentRole::Analyzer, config.analyzer);
+        default_filters.insert(AgentRole::Writer, config.writer);
+        default_filters.insert(AgentRole::Reviewer, config.reviewer);
+        default_filters.insert(AgentRole::Synthesizer, config.synthesizer);
+        default_filters.insert(AgentRole::General, config.general);
 
         let mut role_configs = HashMap::new();
         for (role, filters) in &default_filters {
@@ -163,7 +111,7 @@ impl RoleRouter {
                     role: *role,
                     filters: filters.clone(),
                     keywords: filters.clone(),
-                    recency_multiplier_max: 2.0,
+                    recency_multiplier_max: config.recency_multiplier_max,
                 },
             );
         }
