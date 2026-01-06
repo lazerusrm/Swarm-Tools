@@ -21,23 +21,31 @@ impl TaskComplexity {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AgentRole {
+    Extractor,
     Analyzer,
+    Writer,
     Reviewer,
+    Synthesizer,
     Tester,
     Documenter,
     Optimizer,
     Specialist,
+    General,
 }
 
 impl AgentRole {
     pub fn as_str(&self) -> &'static str {
         match self {
+            AgentRole::Extractor => "extractor",
             AgentRole::Analyzer => "analyzer",
+            AgentRole::Writer => "writer",
             AgentRole::Reviewer => "reviewer",
+            AgentRole::Synthesizer => "synthesizer",
             AgentRole::Tester => "tester",
             AgentRole::Documenter => "documenter",
             AgentRole::Optimizer => "optimizer",
             AgentRole::Specialist => "specialist",
+            AgentRole::General => "general",
         }
     }
 }
@@ -238,3 +246,112 @@ pub struct ModeComparison {
 }
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmBudget {
+    pub total_budget: u32,
+    pub allocated: std::collections::HashMap<String, u32>,
+    pub safety_reserve: u32,
+    pub min_per_agent: u32,
+}
+
+impl Default for SwarmBudget {
+    fn default() -> Self {
+        Self {
+            total_budget: 200_000,
+            allocated: std::collections::HashMap::new(),
+            safety_reserve: 30_000,
+            min_per_agent: 10_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetAllocation {
+    pub timestamp: String,
+    pub per_agent: u32,
+    pub adjustments: Vec<String>,
+    pub safety_reserve: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStats {
+    pub agent_id: String,
+    pub contribution_score: f64,
+    pub usage_rate: f64,
+    pub task_success_rate: f64,
+    pub current_budget: u32,
+    pub recent_turns: Vec<TurnStats>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnStats {
+    pub turn_number: u32,
+    pub contribution: f64,
+    pub tokens_used: u32,
+    pub tasks_completed: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrajectoryLog {
+    pub entries: Vec<TrajectoryEntry>,
+    pub tokens_used: u32,
+    pub compressibility_score: f64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrajectoryEntry {
+    pub timestamp: String,
+    pub action: String,
+    pub outcome: String,
+    pub is_repeat: bool,
+    pub impact_score: f64,
+    pub succeeded: bool,
+    pub tokens_used: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressedTrajectory {
+    pub preserved: Vec<TrajectoryEntry>,
+    pub summarized: Vec<SummaryGroup>,
+    pub compression_ratio: f64,
+    pub debug_raw: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SummaryGroup {
+    pub pattern: String,
+    pub count: u32,
+    pub consolidated_description: String,
+    pub tokens_saved: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StepStatus {
+    Pending,
+    Active,
+    Complete,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanStep {
+    pub step_number: u32,
+    pub action: String,
+    pub target: String,
+    pub expected_outcome: String,
+    pub expected_tokens: u32,
+    pub contribution_score: f64,
+    pub impact_score: f64,
+    pub priority: f64,
+    pub status: StepStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Plan {
+    pub steps: Vec<PlanStep>,
+    pub total_expected_tokens: u32,
+    pub status: String,
+    pub created_at: String,
+}

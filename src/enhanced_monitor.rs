@@ -84,6 +84,11 @@ pub struct EnhancedMonitor {
     context_threshold: f64,
     variance_threshold: f64,
     acceleration_threshold: f64,
+
+    #[allow(dead_code)]
+    budget: Option<crate::types::SwarmBudget>,
+    agent_usage_history: HashMap<String, Vec<crate::types::TurnStats>>,
+    turn_counter: u32,
 }
 
 impl EnhancedMonitor {
@@ -104,6 +109,9 @@ impl EnhancedMonitor {
             context_threshold: 70.0,
             variance_threshold: 2.0,
             acceleration_threshold: 1000.0,
+            budget: Some(crate::types::SwarmBudget::default()),
+            agent_usage_history: HashMap::new(),
+            turn_counter: 0,
         }
     }
 
@@ -571,4 +579,306 @@ impl Default for EnhancedMonitor {
     fn default() -> Self {
         Self::new(200_000)
     }
+}
+
+impl TrajectoryCompression for EnhancedMonitor {
+    fn get_compression_threshold(&self) -> (usize, usize) {
+        (18, 25000)
+    }
+
+    fn should_compress(&self, context_pct: f64, steps: usize, tokens: usize) -> bool {
+        context_pct > 0.80 && (steps >= 18 || tokens >= 25000)
+    }
+
+    fn compress_trajectory(
+        &self,
+        trajectory: &crate::types::TrajectoryLog,
+    ) -> crate::types::CompressedTrajectory {
+        let high_impact_threshold = 0.7;
+
+        let preserved: Vec<crate::types::TrajectoryEntry> = trajectory
+            .entries
+            .iter()
+            .filter(|e| e.impact_score >= high_impact_threshold || e.succeeded)
+            .cloned()
+            .collect();
+
+        let low_impact: Vec<&crate::types::TrajectoryEntry> = trajectory
+            .entries
+            .iter()
+            .filter(|e| e.impact_score < high_impact_threshold && !e.succeeded)
+            .collect();
+
+        let summarized = Self::group_and_summarize(&low_impact);
+
+        let original_tokens = trajectory.tokens_used;
+        let preserved_tokens: u32 = preserved.iter().map(|e| e.tokens_used).sum();
+        let summarized_tokens: u32 = summarized.iter().map(|s| s.tokens_saved).sum();
+        let compressed_tokens = preserved_tokens + summarized_tokens / 3;
+
+        let compression_ratio = if original_tokens > 0 {
+            compressed_tokens as f64 / original_tokens as f64
+        } else {
+            0.0
+        };
+
+        crate::types::CompressedTrajectory {
+            preserved,
+            summarized,
+            compression_ratio,
+            debug_raw: None,
+        }
+    }
+
+    fn filter_expired_info(
+        &self,
+        entries: &[crate::types::TrajectoryEntry],
+    ) -> Vec<crate::types::TrajectoryEntry> {
+        let mut latest_by_action: HashMap<String, &crate::types::TrajectoryEntry> = HashMap::new();
+
+        for entry in entries {
+            if entry.succeeded {
+                if let Some(existing) = latest_by_action.get(&entry.action) {
+                    if entry.tokens_used > existing.tokens_used {
+                        latest_by_action.insert(entry.action.clone(), entry);
+                    }
+                } else {
+                    latest_by_action.insert(entry.action.clone(), entry);
+                }
+            }
+        }
+
+        latest_by_action.into_values().cloned().collect()
+    }
+
+    fn group_and_summarize(
+        entries: &[&crate::types::TrajectoryEntry],
+    ) -> Vec<crate::types::SummaryGroup> {
+        let mut action_groups: HashMap<String, Vec<&crate::types::TrajectoryEntry>> =
+            HashMap::new();
+
+        for entry in entries {
+            action_groups
+                .entry(entry.action.clone())
+                .or_insert_with(Vec::new)
+                .push(entry);
+        }
+
+        let mut summaries = Vec::new();
+
+        for (action, group) in &action_groups {
+            let count = group.len();
+            let first = group.first().unwrap();
+            let consolidated = if count == 1 {
+                first.outcome.clone()
+            } else {
+                format!("{}x {} → consolidated", count, action)
+            };
+
+            let avg_tokens: u32 = group.iter().map(|e| e.tokens_used).sum::<u32>() / count as u32;
+            let tokens_saved = (avg_tokens * (count as u32 - 1)) / 2;
+
+            summaries.push(crate::types::SummaryGroup {
+                pattern: action.clone(),
+                count: count as u32,
+                consolidated_description: consolidated,
+                tokens_saved,
+            });
+        }
+
+        summaries
+    }
+}
+
+impl ResourceManager for EnhancedMonitor {
+    fn new_resource_manager(total_budget: u32) -> Self {
+        let mut monitor = Self::new(total_budget as usize);
+        monitor.budget = Some(crate::types::SwarmBudget {
+            total_budget,
+            allocated: HashMap::new(),
+            safety_reserve: (total_budget as f64 * 0.15) as u32,
+            min_per_agent: 10000,
+        });
+        monitor
+    }
+
+    fn track_usage(
+        &mut self,
+        agent_id: &str,
+        tokens_used: u32,
+        contribution: f64,
+        tasks_completed: u32,
+    ) {
+        let turn = crate::types::TurnStats {
+            turn_number: self.turn_counter,
+            contribution,
+            tokens_used,
+            tasks_completed,
+        };
+
+        self.agent_usage_history
+            .entry(agent_id.to_string())
+            .or_insert_with(Vec::new)
+            .push(turn);
+
+        if self.agent_usage_history[agent_id].len() > 10 {
+            self.agent_usage_history
+                .get_mut(agent_id)
+                .unwrap()
+                .remove(0);
+        }
+
+        self.turn_counter += 1;
+    }
+
+    fn check_imbalance(&self) -> bool {
+        if self.agent_usage_history.len() < 2 {
+            return false;
+        }
+
+        let contributions: Vec<f64> = self
+            .agent_usage_history
+            .values()
+            .flat_map(|v| v.last().map(|t| t.contribution))
+            .collect();
+
+        if contributions.len() < 2 {
+            return false;
+        }
+
+        let mean: f64 = contributions.iter().sum::<f64>() / contributions.len() as f64;
+        let variance: f64 = contributions
+            .iter()
+            .map(|c| (c - mean).powi(2))
+            .sum::<f64>()
+            / contributions.len() as f64;
+        let std_dev = variance.sqrt();
+
+        if mean > 0.0 {
+            let coefficient_of_variation = std_dev / mean;
+            return coefficient_of_variation > 0.2;
+        }
+
+        false
+    }
+
+    fn reallocate_budget(&mut self, total: u32) -> crate::types::BudgetAllocation {
+        let safety_reserve = (total as f64 * 0.15) as u32;
+        let available = total - safety_reserve;
+
+        let mut agent_contributions: Vec<(String, f64)> = self
+            .agent_usage_history
+            .iter()
+            .map(|(id, turns)| {
+                let avg_contribution = if !turns.is_empty() {
+                    turns.iter().map(|t| t.contribution).sum::<f64>() / turns.len() as f64
+                } else {
+                    0.5
+                };
+                (id.clone(), avg_contribution)
+            })
+            .collect();
+
+        agent_contributions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        let per_agent = if !agent_contributions.is_empty() {
+            available / agent_contributions.len() as u32
+        } else {
+            available / 2
+        };
+
+        let mut adjustments = Vec::new();
+
+        for (id, contribution) in &agent_contributions {
+            if *contribution < 0.3 {
+                adjustments.push(format!(
+                    "Potential prune: Agent {} (contribution: {:.2}, low usage)",
+                    id, contribution
+                ));
+            } else if *contribution > 0.7 {
+                adjustments.push(format!(
+                    "High contributor: Agent {} (contribution: {:.2})",
+                    id, contribution
+                ));
+            }
+        }
+
+        self.budget = Some(crate::types::SwarmBudget {
+            total_budget: total,
+            allocated: agent_contributions
+                .iter()
+                .map(|(id, _)| (id.clone(), per_agent))
+                .collect(),
+            safety_reserve,
+            min_per_agent: 10000,
+        });
+
+        crate::types::BudgetAllocation {
+            timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            per_agent,
+            adjustments,
+            safety_reserve,
+        }
+    }
+
+    fn check_pruning_candidate(&self, agent_id: &str) -> Option<String> {
+        if let Some(turns) = self.agent_usage_history.get(agent_id) {
+            if turns.len() >= 5 {
+                let recent_turns = &turns[turns.len() - 5..];
+                let avg_contribution: f64 =
+                    recent_turns.iter().map(|t| t.contribution).sum::<f64>() / 5.0;
+
+                if avg_contribution < 0.3 {
+                    let avg_usage: f64 = recent_turns
+                        .iter()
+                        .map(|t| t.tokens_used as f64)
+                        .sum::<f64>()
+                        / 5.0;
+                    let usage_rate = if self.budget.is_some() {
+                        avg_usage / self.budget.as_ref().unwrap().total_budget as f64
+                    } else {
+                        0.0
+                    };
+
+                    if usage_rate < 0.2 {
+                        return Some(format!(
+                            "Potential topology change: Agent {} (contribution: {:.2} over 5 turns, usage: {:.2})",
+                            agent_id, avg_contribution, usage_rate
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+pub trait TrajectoryCompression {
+    fn get_compression_threshold(&self) -> (usize, usize);
+    fn should_compress(&self, context_pct: f64, steps: usize, tokens: usize) -> bool;
+    fn compress_trajectory(
+        &self,
+        trajectory: &crate::types::TrajectoryLog,
+    ) -> crate::types::CompressedTrajectory;
+    fn filter_expired_info(
+        &self,
+        entries: &[crate::types::TrajectoryEntry],
+    ) -> Vec<crate::types::TrajectoryEntry>;
+    fn group_and_summarize(
+        entries: &[&crate::types::TrajectoryEntry],
+    ) -> Vec<crate::types::SummaryGroup>;
+}
+
+pub trait ResourceManager {
+    fn new_resource_manager(total_budget: u32) -> Self;
+    fn track_usage(
+        &mut self,
+        agent_id: &str,
+        tokens_used: u32,
+        contribution: f64,
+        tasks_completed: u32,
+    );
+    fn check_imbalance(&self) -> bool;
+    fn reallocate_budget(&mut self, total: u32) -> crate::types::BudgetAllocation;
+    fn check_pruning_candidate(&self, agent_id: &str) -> Option<String>;
 }
