@@ -1,6 +1,31 @@
+use crate::types::*;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const SUPERSEDED_PATTERNS: &[&str] = &[
+    "updated",
+    "replaced",
+    "superseded",
+    "newer",
+    "later",
+    "override",
+    "overrides",
+    "revised",
+    "corrected",
+    "fixed",
+    "refined",
+    "improved",
+];
+
+const REDUNDANT_PATTERNS: &[&str] = &[
+    r"status:?\s*(working|in progress|proceeding)",
+    r"still\s+(working|processing)",
+    r"no\s+(change|updates|new info)",
+    r"continuing\s+as\s+before",
+    r"same\s+as\s+(before|previous)",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenHistoryEntry {
@@ -85,6 +110,10 @@ pub struct EnhancedMonitor {
     variance_threshold: f64,
     acceleration_threshold: f64,
 
+    auto_reduce_low_contrib: bool,
+    low_contrib_reduction_percent: f64,
+    pruning_contribution_threshold: f64,
+
     #[allow(dead_code)]
     budget: Option<crate::types::SwarmBudget>,
     pub agent_usage_history: HashMap<String, Vec<crate::types::TurnStats>>,
@@ -112,6 +141,40 @@ impl EnhancedMonitor {
             budget: Some(crate::types::SwarmBudget::default()),
             agent_usage_history: HashMap::new(),
             turn_counter: 0,
+            auto_reduce_low_contrib: false,
+            low_contrib_reduction_percent: 20.0,
+            pruning_contribution_threshold: 0.3,
+        }
+    }
+
+    pub fn with_auto_reduce(
+        total_context: usize,
+        auto_reduce: bool,
+        reduction_percent: f64,
+        threshold: f64,
+    ) -> Self {
+        Self {
+            total_context,
+            agent_token_history: HashMap::new(),
+            agent_token_rates: HashMap::new(),
+            loop_detection_rates: HashMap::new(),
+            intervention_success_rates: HashMap::new(),
+            scope_adjustment_frequencies: HashMap::new(),
+            context_percentage_history: VecDeque::with_capacity(1000),
+            compaction_events: Vec::new(),
+            agent_failures: HashMap::new(),
+            overall_efficiency_history: VecDeque::with_capacity(100),
+            token_acceleration: HashMap::new(),
+            context_trend: VecDeque::with_capacity(100),
+            context_threshold: 70.0,
+            variance_threshold: 2.0,
+            acceleration_threshold: 1000.0,
+            budget: Some(crate::types::SwarmBudget::default()),
+            agent_usage_history: HashMap::new(),
+            turn_counter: 0,
+            auto_reduce_low_contrib: auto_reduce,
+            low_contrib_reduction_percent: reduction_percent,
+            pruning_contribution_threshold: threshold,
         }
     }
 
@@ -634,17 +697,58 @@ impl TrajectoryCompression for EnhancedMonitor {
         }
     }
 
-    fn filter_expired_info(
-        &self,
-        entries: &[crate::types::TrajectoryEntry],
-    ) -> Vec<crate::types::TrajectoryEntry> {
-        let mut latest_by_action: HashMap<String, &crate::types::TrajectoryEntry> = HashMap::new();
+    fn filter_expired_info(&self, entries: &[TrajectoryEntry]) -> Vec<TrajectoryEntry> {
+        let superseded_regex: Vec<Regex> = SUPERSEDED_PATTERNS
+            .iter()
+            .filter_map(|p| Regex::new(&format!(r"(?i){}", p)).ok())
+            .collect();
+
+        let redundant_regex: Vec<Regex> = REDUNDANT_PATTERNS
+            .iter()
+            .filter_map(|p| Regex::new(p).ok())
+            .collect();
+
+        fn is_superseded(entry: &TrajectoryEntry, patterns: &[Regex]) -> bool {
+            let outcome_lower = entry.outcome.to_lowercase();
+            patterns.iter().any(|p| p.is_match(&outcome_lower))
+        }
+
+        fn is_redundant(entry: &TrajectoryEntry, patterns: &[Regex]) -> bool {
+            let outcome_lower = entry.outcome.to_lowercase();
+            patterns.iter().any(|p| p.is_match(&outcome_lower))
+        }
+
+        let mut latest_by_action: HashMap<String, &TrajectoryEntry> = HashMap::new();
+        let mut superseded_entries: HashSet<String> = HashSet::new();
+        let mut redundant_entries: HashSet<String> = HashSet::new();
 
         for entry in entries {
+            let entry_id = format!("{}:{}", entry.timestamp, entry.action);
+            let entry_id_clone = entry_id.clone();
+
+            if is_superseded(entry, &superseded_regex) {
+                superseded_entries.insert(entry_id);
+                continue;
+            }
+
+            if is_redundant(entry, &redundant_regex) {
+                redundant_entries.insert(entry_id_clone.clone());
+                if entry.impact_score < 0.3 {
+                    continue;
+                }
+            }
+
             if entry.succeeded {
                 if let Some(existing) = latest_by_action.get(&entry.action) {
-                    if entry.tokens_used > existing.tokens_used {
+                    if entry.impact_score > existing.impact_score
+                        || (entry.impact_score == existing.impact_score
+                            && entry.tokens_used > existing.tokens_used)
+                    {
+                        let old_id = format!("{}:{}", existing.timestamp, existing.action);
+                        superseded_entries.insert(old_id);
                         latest_by_action.insert(entry.action.clone(), entry);
+                    } else {
+                        superseded_entries.insert(entry_id_clone);
                     }
                 } else {
                     latest_by_action.insert(entry.action.clone(), entry);
@@ -652,7 +756,24 @@ impl TrajectoryCompression for EnhancedMonitor {
             }
         }
 
-        latest_by_action.into_values().cloned().collect()
+        let mut result: Vec<TrajectoryEntry> = Vec::new();
+
+        for entry in entries {
+            let entry_id = format!("{}:{}", entry.timestamp, entry.action);
+
+            if superseded_entries.contains(&entry_id) {
+                continue;
+            }
+
+            if redundant_entries.contains(&entry_id) && entry.impact_score < 0.5 {
+                continue;
+            }
+
+            result.push(entry.clone());
+        }
+
+        result.sort_by(|a, b| b.impact_score.partial_cmp(&a.impact_score).unwrap());
+        result
     }
 
     fn group_and_summarize(
@@ -792,13 +913,22 @@ impl ResourceManager for EnhancedMonitor {
         };
 
         let mut adjustments = Vec::new();
+        let mut reduced_agents = Vec::new();
 
         for (id, contribution) in &agent_contributions {
-            if *contribution < 0.3 {
-                adjustments.push(format!(
-                    "Potential prune: Agent {} (contribution: {:.2}, low usage)",
-                    id, contribution
-                ));
+            if *contribution < self.pruning_contribution_threshold {
+                if self.auto_reduce_low_contrib {
+                    reduced_agents.push(id.clone());
+                    adjustments.push(format!(
+                        "Reduced budget: Agent {} (contribution: {:.2}, reduced by {:.0}%)",
+                        id, contribution, self.low_contrib_reduction_percent
+                    ));
+                } else {
+                    adjustments.push(format!(
+                        "Potential prune: Agent {} (contribution: {:.2}, low usage)",
+                        id, contribution
+                    ));
+                }
             } else if *contribution > 0.7 {
                 adjustments.push(format!(
                     "High contributor: Agent {} (contribution: {:.2})",
@@ -807,12 +937,42 @@ impl ResourceManager for EnhancedMonitor {
             }
         }
 
+        let per_agent = if !agent_contributions.is_empty() {
+            let base_per_agent = available / agent_contributions.len() as u32;
+            if !reduced_agents.is_empty() {
+                base_per_agent
+            } else {
+                base_per_agent
+            }
+        } else {
+            available / 2
+        };
+
+        let reduced_per_agent =
+            (per_agent as f64 * (1.0 - self.low_contrib_reduction_percent / 100.0)) as u32;
+
+        let allocated_budget: HashMap<String, u32> = agent_contributions
+            .iter()
+            .map(|(id, contribution)| {
+                let budget = if reduced_agents.contains(id)
+                    && *contribution < self.pruning_contribution_threshold
+                {
+                    reduced_per_agent.max(
+                        self.budget
+                            .as_ref()
+                            .map(|b| b.min_per_agent)
+                            .unwrap_or(10000),
+                    )
+                } else {
+                    per_agent
+                };
+                (id.clone(), budget)
+            })
+            .collect();
+
         self.budget = Some(crate::types::SwarmBudget {
             total_budget: total,
-            allocated: agent_contributions
-                .iter()
-                .map(|(id, _)| (id.clone(), per_agent))
-                .collect(),
+            allocated: allocated_budget,
             safety_reserve,
             min_per_agent: 10000,
         });

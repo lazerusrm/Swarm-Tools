@@ -1,8 +1,10 @@
 use swarm_tools::codified_reasoning::CodifiedReasoning;
 use swarm_tools::communication_optimizer::CommunicationOptimizer;
+use swarm_tools::config::{load_config_from_json, merge_configs, save_config_to_json, SwarmConfig};
 use swarm_tools::enhanced_monitor::{EnhancedMonitor, ResourceManager, TrajectoryCompression};
 use swarm_tools::role_router::RoleRouter;
-use swarm_tools::types::{AgentRole, Plan, TrajectoryEntry, TrajectoryLog};
+use swarm_tools::trajectory_compressor::{TrajectoryCompressor, TrajectoryCompressorConfig};
+use swarm_tools::types::{AgentRole, TrajectoryEntry, TrajectoryLog};
 
 #[cfg(test)]
 mod comprehensive_integration_tests {
@@ -288,5 +290,268 @@ mod comprehensive_integration_tests {
         monitor.track_usage("lazy_agent", 50, 0.1, 0);
 
         assert!(monitor.check_imbalance());
+    }
+
+    #[test]
+    fn test_trajectory_compressor_full_impl() {
+        let config = TrajectoryCompressorConfig {
+            preserve_threshold: 0.6,
+            max_summaries: 5,
+            superseded_patterns: vec!["updated".to_string(), "fixed".to_string()],
+            filter_redundant: true,
+            max_tokens: 5000,
+        };
+        let compressor = TrajectoryCompressor::with_config(config);
+
+        let trajectory = TrajectoryLog {
+            entries: vec![
+                TrajectoryEntry {
+                    timestamp: "2025-01-06T10:00:00Z".to_string(),
+                    action: "analyze".to_string(),
+                    outcome: "Analysis complete".to_string(),
+                    is_repeat: false,
+                    impact_score: 0.8,
+                    succeeded: true,
+                    tokens_used: 500,
+                },
+                TrajectoryEntry {
+                    timestamp: "2025-01-06T10:01:00Z".to_string(),
+                    action: "analyze".to_string(),
+                    outcome: "Analysis updated with new findings".to_string(),
+                    is_repeat: true,
+                    impact_score: 0.9,
+                    succeeded: true,
+                    tokens_used: 600,
+                },
+                TrajectoryEntry {
+                    timestamp: "2025-01-06T10:02:00Z".to_string(),
+                    action: "failed".to_string(),
+                    outcome: "Connection timeout".to_string(),
+                    is_repeat: false,
+                    impact_score: 0.2,
+                    succeeded: false,
+                    tokens_used: 100,
+                },
+            ],
+            tokens_used: 1200,
+            compressibility_score: 0.5,
+            created_at: "2025-01-06T10:00:00Z".to_string(),
+        };
+
+        let compressed = compressor.compress_trajectory(&trajectory);
+
+        assert!(compressed.preserved.len() > 0);
+        assert!(compressed.compression_ratio > 0.0);
+    }
+
+    #[test]
+    fn test_config_loading_and_merging() {
+        let default_config = SwarmConfig::default();
+        let override_config = SwarmConfig {
+            general: swarm_tools::config::GeneralConfig {
+                default_context_budget: 300000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let merged = merge_configs(default_config, &override_config);
+        assert_eq!(merged.general.default_context_budget, 300000);
+    }
+
+    #[test]
+    fn test_auto_reduce_low_contrib() {
+        let mut monitor = EnhancedMonitor::with_auto_reduce(200_000, true, 30.0, 0.4);
+
+        monitor.track_usage("high_agent", 500, 0.8, 5);
+        monitor.track_usage("low_agent", 100, 0.2, 1);
+
+        let allocation = monitor.reallocate_budget(100_000);
+
+        let has_reduction = allocation
+            .adjustments
+            .iter()
+            .any(|a| a.contains("Reduced budget"));
+        assert!(has_reduction);
+    }
+
+    #[test]
+    fn test_expanded_superseded_detection() {
+        let monitor = EnhancedMonitor::new(200_000);
+
+        let entries = vec![
+            TrajectoryEntry {
+                timestamp: "2025-01-06T10:00:00Z".to_string(),
+                action: "query".to_string(),
+                outcome: "Old result from first query".to_string(),
+                is_repeat: false,
+                impact_score: 0.5,
+                succeeded: true,
+                tokens_used: 200,
+            },
+            TrajectoryEntry {
+                timestamp: "2025-01-06T10:01:00Z".to_string(),
+                action: "query".to_string(),
+                outcome: "This result updated the previous one with new data".to_string(),
+                is_repeat: true,
+                impact_score: 0.7,
+                succeeded: true,
+                tokens_used: 300,
+            },
+            TrajectoryEntry {
+                timestamp: "2025-01-06T10:02:00Z".to_string(),
+                action: "query".to_string(),
+                outcome: "Further refined result that overrides the update".to_string(),
+                is_repeat: true,
+                impact_score: 0.9,
+                succeeded: true,
+                tokens_used: 400,
+            },
+        ];
+
+        let filtered = monitor.filter_expired_info(&entries);
+
+        assert!(filtered.len() >= 1);
+        let has_high_impact = filtered.iter().any(|e| e.impact_score >= 0.5);
+        assert!(
+            has_high_impact,
+            "Should have at least one entry with impact >= 0.5"
+        );
+    }
+
+    #[test]
+    fn test_cross_module_codified_to_compression() {
+        let reasoning = CodifiedReasoning::new();
+        let compressor = TrajectoryCompressor::new();
+
+        let plan_text = r#"
+        1. Extract data from files
+        2. Analyze patterns
+        3. Compress results
+        4. Generate report
+        "#;
+
+        let plan = reasoning.codify_prompt(plan_text, "analyzer");
+        assert!(plan.steps.len() > 0);
+
+        let trajectory = TrajectoryLog {
+            entries: plan
+                .steps
+                .iter()
+                .enumerate()
+                .map(|(i, step)| TrajectoryEntry {
+                    timestamp: format!("2025-01-06T10:0{}:00Z", i),
+                    action: step.action.clone(),
+                    outcome: format!("Step {} completed", i + 1),
+                    is_repeat: false,
+                    impact_score: step.impact_score,
+                    succeeded: true,
+                    tokens_used: 100,
+                })
+                .collect(),
+            tokens_used: (plan.steps.len() * 100) as u32,
+            compressibility_score: 0.6,
+            created_at: "2025-01-06T10:00:00Z".to_string(),
+        };
+
+        let compressed = compressor.compress_trajectory(&trajectory);
+        assert!(compressed.preserved.len() >= plan.steps.len() / 2);
+    }
+
+    #[test]
+    fn test_cross_module_routing_to_allocation() {
+        let optimizer = CommunicationOptimizer::new().unwrap();
+        let mut monitor = EnhancedMonitor::with_auto_reduce(200_000, true, 25.0, 0.35);
+
+        let communications = vec![
+            serde_json::json!({
+                "source": "extractor",
+                "target": "analyzer",
+                "content": "High priority: file_deltas with critical findings",
+                "priority": "Critical"
+            }),
+            serde_json::json!({
+                "source": "reviewer",
+                "target": "writer",
+                "content": "Status update: continuing with quality review",
+                "priority": "Low"
+            }),
+        ];
+
+        let result = optimizer
+            .optimize_for_role(&communications, AgentRole::Analyzer)
+            .unwrap();
+
+        monitor.track_usage("analyzer", result.optimized_tokens as u32, 0.85, 2);
+        monitor.track_usage("writer", 200, 0.25, 1);
+
+        let allocation = monitor.reallocate_budget(100_000);
+        assert!(allocation.adjustments.len() >= 1);
+    }
+
+    #[test]
+    fn test_full_workflow_integration() {
+        let config = SwarmConfig {
+            trajectory_compression: swarm_tools::config::TrajectoryCompressionConfig {
+                preserve_threshold: 0.5,
+                ..Default::default()
+            },
+            resource_allocation: swarm_tools::config::ResourceAllocationConfig {
+                auto_reduce_low_contrib: true,
+                low_contrib_reduction_percent: 20.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let reasoning = CodifiedReasoning::new();
+        let compressor = TrajectoryCompressor::with_config(TrajectoryCompressorConfig {
+            preserve_threshold: config.trajectory_compression.preserve_threshold,
+            ..Default::default()
+        });
+        let mut monitor = EnhancedMonitor::with_auto_reduce(
+            config.general.default_context_budget,
+            config.resource_allocation.auto_reduce_low_contrib,
+            config.resource_allocation.low_contrib_reduction_percent,
+            config.resource_allocation.pruning_contribution_threshold,
+        );
+
+        let plan = reasoning.codify_prompt("Extract, analyze, compress, report", "synthesizer");
+        assert!(plan.steps.len() > 0);
+
+        let trajectory = TrajectoryLog {
+            entries: plan
+                .steps
+                .iter()
+                .enumerate()
+                .map(|(i, step)| TrajectoryEntry {
+                    timestamp: format!("2025-01-06T10:0{}:00Z", i),
+                    action: step.action.clone(),
+                    outcome: format!("Step {}: {}", i + 1, step.action),
+                    is_repeat: false,
+                    impact_score: step.impact_score,
+                    succeeded: true,
+                    tokens_used: 150,
+                })
+                .collect(),
+            tokens_used: (plan.steps.len() * 150) as u32,
+            compressibility_score: 0.6,
+            created_at: "2025-01-06T10:00:00Z".to_string(),
+        };
+
+        let compressed = compressor.compress_trajectory(&trajectory);
+        assert!(compressed.compression_ratio > 0.0);
+
+        for i in 0..5 {
+            monitor.track_usage(
+                &format!("agent_{}", i % 3),
+                300 + (i * 50) as u32,
+                0.3 + (i as f64 * 0.1),
+                2 + i,
+            );
+        }
+
+        let allocation = monitor.reallocate_budget(config.general.default_context_budget as u32);
+        assert!(allocation.safety_reserve > 0);
     }
 }
