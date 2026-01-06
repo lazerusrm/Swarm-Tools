@@ -1,7 +1,9 @@
 use crate::config::RoleRouterKeywordsConfig;
+use crate::semantic_engine::{RoleEmbeddingStore, SemanticEngine};
 use crate::types::AgentRole;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Configuration for role-based context filtering.
 ///
@@ -66,9 +68,8 @@ pub struct FilteredContent {
 
 /// Router for filtering context based on agent roles.
 ///
-/// Uses keyword matching, position-based recency weighting, and impact scores
-/// to determine which messages are most relevant for a given agent role.
-/// Based on RCR-Router (Aug 2025) for 40-65% communication savings.
+/// Uses embedding-based semantic matching when available, with keyword matching as fallback.
+/// Position-based recency weighting and impact scores are combined for final relevance.
 #[derive(Debug, Clone)]
 pub struct RoleRouter {
     /// Role-specific configurations.
@@ -77,18 +78,16 @@ pub struct RoleRouter {
     custom_configs: HashMap<String, RoleConfig>,
     /// Default filters for each role.
     default_filters: HashMap<AgentRole, Vec<String>>,
+    /// Semantic engine for embedding-based routing.
+    semantic_engine: Option<Arc<SemanticEngine>>,
+    /// Pre-computed role embeddings.
+    role_embeddings: Option<Arc<RoleEmbeddingStore>>,
+    /// Whether to use semantic routing.
+    use_semantic: bool,
 }
 
 impl RoleRouter {
     /// Creates a new RoleRouter with default configurations for all agent roles.
-    ///
-    /// Initializes role-specific filters based on typical responsibilities:
-    /// - Extractor: file_deltas, git_diff, changed_files
-    /// - Analyzer: metrics, patterns, analysis_results
-    /// - Writer: draft_content, updates, modifications
-    /// - Reviewer: code_changes, security_issues, quality_gate
-    /// - Synthesizer: summaries, findings, consolidations
-    /// - General: all, message, communication, update
     pub fn new() -> Self {
         Self::with_config(RoleRouterKeywordsConfig::default())
     }
@@ -120,25 +119,140 @@ impl RoleRouter {
             role_configs,
             custom_configs: HashMap::new(),
             default_filters,
+            semantic_engine: None,
+            role_embeddings: None,
+            use_semantic: false,
         }
+    }
+
+    /// Creates a RoleRouter with semantic embedding support.
+    pub fn with_semantic_engine(semantic_engine: Arc<SemanticEngine>) -> Self {
+        let mut router = Self::with_config(RoleRouterKeywordsConfig::default());
+        router.semantic_engine = Some(semantic_engine.clone());
+        router.role_embeddings = Some(Arc::new(RoleEmbeddingStore::new(semantic_engine)));
+        router.use_semantic = true;
+        router
+    }
+
+    /// Routes a task to the most appropriate agent role based on semantic similarity.
+    ///
+    /// Uses embedding cosine similarity between the task description and role definitions.
+    /// Falls back to keyword matching if embeddings are not available.
+    ///
+    /// # Arguments
+    /// * `task_description` - The task/user prompt to route
+    ///
+    /// # Returns
+    /// The most appropriate AgentRole for this task.
+    pub fn route_task(&self, task_description: &str) -> AgentRole {
+        if self.use_semantic {
+            if let Some(store) = &self.role_embeddings {
+                return store.route_task(task_description);
+            }
+        }
+
+        // Fallback to keyword-based routing
+        self.route_task_keyword(task_description)
+    }
+
+    /// Fallback keyword-based task routing.
+    fn route_task_keyword(&self, task: &str) -> AgentRole {
+        let task_lower = task.to_lowercase();
+
+        // Score each role based on keyword matching
+        let mut scores: Vec<(AgentRole, f64)> = self
+            .default_filters
+            .iter()
+            .map(|(role, keywords)| {
+                let score = self.task_keyword_score(&task_lower, keywords);
+                (*role, score)
+            })
+            .collect();
+
+        // Sort by score descending
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        eprintln!(
+            "DEBUG get_all_routing_scores: task='{}', scores={:?}",
+            task, scores
+        );
+
+        // Return the highest scoring role
+        scores
+            .first()
+            .map(|(r, _)| *r)
+            .unwrap_or(AgentRole::General)
+    }
+
+    fn task_keyword_score(&self, task: &str, keywords: &[String]) -> f64 {
+        if keywords.is_empty() {
+            return 0.0;
+        }
+
+        // "all" is a special catch-all keyword with low priority
+        let has_all_only = keywords.len() == 1 && keywords.iter().any(|k| k == "all");
+        if has_all_only {
+            return 0.1;
+        }
+
+        let task_normalized = task.replace(' ', "_");
+        let task_words: Vec<&str> = task_normalized
+            .split('_')
+            .filter(|w| !w.is_empty())
+            .collect();
+        let mut exact_match_count = 0;
+        let mut partial_match_count = 0;
+
+        for keyword in keywords {
+            if keyword == "all" {
+                continue;
+            }
+            let keyword_lower = keyword.to_lowercase();
+            let keyword_words: Vec<&str> =
+                keyword_lower.split('_').filter(|w| !w.is_empty()).collect();
+
+            // Check if keyword is a substring of task (handles underscores vs spaces)
+            if task_normalized.contains(&keyword_lower) {
+                exact_match_count += 1;
+            } else {
+                // Check bidirectional partial matching (minimum 3 chars to avoid spurious matches):
+                // 1. Any task word starts with keyword word (e.g., "security" matches "security_issues")
+                // 2. Any keyword word starts with task word (e.g., "security_issues" matches "security")
+                let mut matched = false;
+                for task_word in &task_words {
+                    if task_word.len() < 3 {
+                        continue; // Skip very short task words
+                    }
+                    for kw_word in &keyword_words {
+                        if kw_word.len() < 3 {
+                            continue; // Skip very short keyword words
+                        }
+                        if task_word.starts_with(kw_word) || kw_word.starts_with(task_word) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if matched {
+                        break;
+                    }
+                }
+                if matched {
+                    partial_match_count += 1;
+                }
+            }
+        }
+
+        // Weight exact matches more heavily than partial matches
+        let total_score = exact_match_count as f64 + partial_match_count as f64 * 0.5;
+        total_score / keywords.len() as f64
     }
 
     /// Calculates a relevance score for content based on agent role.
     ///
     /// The score combines:
-    /// - Keyword matching (base relevance)
+    /// - Keyword matching or semantic similarity (base relevance)
     /// - Recency weighting (2.0x multiplier for last 10% of messages)
     /// - Impact boost (30% bonus based on impact_score)
-    ///
-    /// # Arguments
-    /// * `content` - The message content to score
-    /// * `role` - The target agent role
-    /// * `position` - Position in the message sequence (0-indexed)
-    /// * `total_messages` - Total number of messages in the sequence
-    /// * `impact_score` - Importance score for this message (0.0 to 1.0)
-    ///
-    /// # Returns
-    /// A composite relevance score. Higher scores indicate greater relevance.
     pub fn score_for_role(
         &self,
         content: &str,
@@ -219,16 +333,6 @@ impl RoleRouter {
     }
 
     /// Filters and scores a sequence of messages for a specific agent role.
-    ///
-    /// Each message is scored based on role-specific keywords and recency.
-    /// Messages in the last 10% of the sequence receive up to 2.0x recency boost.
-    ///
-    /// # Arguments
-    /// * `messages` - Slice of tuples containing (content, position, impact_score)
-    /// * `role` - The target agent role for filtering
-    ///
-    /// # Returns
-    /// A RoleContext containing filtered content with relevance scores.
     pub fn filter_context(&self, messages: &[(&str, usize, f64)], role: AgentRole) -> RoleContext {
         let keywords = self.get_role_keywords(role);
         let recency_multiplier_max = self
@@ -289,25 +393,11 @@ impl RoleRouter {
     }
 
     /// Adds a custom role configuration.
-    ///
-    /// Custom configs override default filters for a specific role.
-    ///
-    /// # Arguments
-    /// * `name` - Name to identify this custom configuration
-    /// * `config` - The RoleConfig to add
     pub fn add_custom_config(&mut self, name: String, config: RoleConfig) {
         self.custom_configs.insert(name, config);
     }
 
     /// Gets the filter keywords for a specific agent role.
-    ///
-    /// Returns custom config filters if available, otherwise default filters.
-    ///
-    /// # Arguments
-    /// * `role` - The agent role to get filters for
-    ///
-    /// # Returns
-    /// Vector of filter keywords for the specified role.
     pub fn get_role_filter(&self, role: AgentRole) -> Vec<String> {
         self.custom_configs
             .values()
@@ -315,6 +405,37 @@ impl RoleRouter {
             .map(|c| c.filters.clone())
             .or(self.default_filters.get(&role).cloned())
             .unwrap_or_else(|| vec!["all".to_string()])
+    }
+
+    /// Returns whether semantic routing is enabled.
+    pub fn is_using_semantic(&self) -> bool {
+        self.use_semantic
+    }
+
+    /// Gets routing scores for all roles (useful for debugging/transparency).
+    pub fn get_all_routing_scores(&self, task: &str) -> Vec<(AgentRole, f64)> {
+        if self.use_semantic {
+            if let Some(store) = &self.role_embeddings {
+                return store
+                    .get_all_scores(task)
+                    .into_iter()
+                    .map(|(r, s)| (r, s as f64))
+                    .collect();
+            }
+        }
+
+        // Fallback to keyword scores
+        let task_lower = task.to_lowercase();
+        let mut scores: Vec<(AgentRole, f64)> = self
+            .default_filters
+            .iter()
+            .map(|(role, keywords)| {
+                let score = self.task_keyword_score(&task_lower, keywords);
+                (*role, score)
+            })
+            .collect();
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        scores
     }
 }
 
@@ -389,5 +510,32 @@ mod tests {
         let router = RoleRouter::new();
         let extractor_filters = router.get_role_filter(AgentRole::Extractor);
         assert!(extractor_filters.contains(&"file_deltas".to_string()));
+    }
+
+    #[test]
+    fn test_route_task_keyword() {
+        let router = RoleRouter::new();
+
+        // Code extraction task
+        let role = router.route_task("Show me the git diff for the recent changes");
+        assert_eq!(role, AgentRole::Extractor);
+
+        // Code analysis task
+        let role = router.route_task("Analyze the performance metrics and identify bottlenecks");
+        assert_eq!(role, AgentRole::Analyzer);
+
+        // Code review task
+        let role = router.route_task("Review this code for security vulnerabilities");
+        assert_eq!(role, AgentRole::Reviewer);
+    }
+
+    #[test]
+    fn test_get_all_routing_scores() {
+        let router = RoleRouter::new();
+        let scores = router.get_all_routing_scores("Analyze code metrics");
+
+        assert!(!scores.is_empty());
+        // Analyzer should be highest
+        assert_eq!(scores[0].0, AgentRole::Analyzer);
     }
 }

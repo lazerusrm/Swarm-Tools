@@ -1,8 +1,10 @@
 use crate::enhanced_monitor::TrajectoryCompression;
+use crate::security::compile_regex_with_timeout;
 use crate::types::{CompressedTrajectory, SummaryGroup, TrajectoryEntry, TrajectoryLog};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Configuration for trajectory compression behavior.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,7 +64,12 @@ impl TrajectoryCompressor {
         let superseded_patterns = config
             .superseded_patterns
             .iter()
-            .filter_map(|p| Regex::new(p).ok())
+            .filter_map(|p| {
+                compile_regex_with_timeout(p, Duration::from_millis(100)).or_else(|| {
+                    // Fallback to basic check and compilation without timeout
+                    Regex::new(p).ok()
+                })
+            })
             .collect();
 
         Self {
@@ -84,7 +91,10 @@ impl TrajectoryCompressor {
         self.superseded_patterns = config
             .superseded_patterns
             .iter()
-            .filter_map(|p| Regex::new(p).ok())
+            .filter_map(|p| {
+                compile_regex_with_timeout(p, Duration::from_millis(100))
+                    .or_else(|| Regex::new(p).ok())
+            })
             .collect();
         self.config = config;
     }

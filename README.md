@@ -58,6 +58,7 @@ Pre-built binaries in Releases.
 
 ## Primary Features
 
+- **Semantic Task Routing** - ML-powered embedding-based role assignment using BERT (all-MiniLM-L6-v2)
 - **Persistent Multi-Type Loop Detection** - Crushes Ralph loops before they start
 - **Role-Aware Routing** - Recency + impact boosted (45-65% communication savings)
 - **Sparse Trajectory Compression** - Impact-based, expired/redundant filtering (25-40% context reduction)
@@ -69,6 +70,21 @@ Pre-built binaries in Releases.
 - **Parallel Execution Planning** - Smart batching + mode comparison
 - **Communication Optimization** - Redundancy/irrelevance pattern removal
 - **Fully Configurable** - JSON overrides for every heuristic, weight, pattern, and threshold
+
+### Semantic Engine
+
+The semantic engine uses transformer-based embeddings for intelligent task-to-role routing:
+
+- **BERT embeddings** - all-MiniLM-L6-v2 model (384-dimensional vectors)
+- **Cosine similarity** - Precise matching between user prompts and role descriptions
+- **Cross-platform support** - Full ONNX inference on Linux/macOS, runtime DLL loading on Windows
+- **Graceful fallback** - TF-IDF style hash embeddings if ML unavailable
+
+Role routing examples:
+- "Review this pull request for security issues" → `Reviewer`
+- "Show me the git diff for recent changes" → `Extractor`
+- "Analyze the codebase metrics" → `Analyzer`
+- "Write documentation for this API" → `Documenter`
 
 Everything is optional, lightweight (no heavy deps), and runtime-safe.
 

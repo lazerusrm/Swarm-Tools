@@ -3,7 +3,13 @@ use std::fs;
 use std::path::PathBuf;
 use swarm_tools::codified_reasoning::CodifiedReasoning;
 use swarm_tools::enhanced_monitor::{EnhancedMonitor, TrajectoryCompression};
+use swarm_tools::security::{
+    sanitize_agent_id, sanitize_error_message, validate_filename, SecurityError,
+};
 use swarm_tools::types::{Plan, TrajectoryEntry, TrajectoryLog};
+
+const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10MB
+const MAX_PATH_LENGTH: usize = 4096;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -18,9 +24,26 @@ fn main() {
         std::process::exit(1);
     }
 
-    let agent_id = &args[1];
-    let state_file = PathBuf::from(&args[2]);
-    let checkpoint_file = PathBuf::from(&args[3]);
+    // Sanitize agent_id to prevent path traversal
+    let raw_agent_id = &args[1];
+    let agent_id = sanitize_agent_id(raw_agent_id);
+
+    // Validate and sanitize file paths
+    let state_file = match validate_filename(&args[2]) {
+        Ok(name) => PathBuf::from(".claude/swarm-tools/states").join(name),
+        Err(_) => {
+            eprintln!("Error: Invalid state file path");
+            std::process::exit(1);
+        }
+    };
+
+    let checkpoint_file = match validate_filename(&args[3]) {
+        Ok(name) => PathBuf::from(".claude/swarm-tools/checkpoints").join(name),
+        Err(_) => {
+            eprintln!("Error: Invalid checkpoint file path");
+            std::process::exit(1);
+        }
+    };
 
     let mut active_plan: Option<Plan> = None;
     let mut trajectory_entries: Vec<TrajectoryEntry> = Vec::new();
@@ -29,16 +52,32 @@ fn main() {
     while i < args.len() {
         if args[i] == "--plan" && i + 1 < args.len() {
             let plan_json = &args[i + 1];
-            match serde_json::from_str::<Plan>(plan_json) {
-                Ok(plan) => active_plan = Some(plan),
-                Err(e) => eprintln!("Warning: Could not parse plan: {}", e),
+            // Limit JSON size to prevent DoS
+            if plan_json.len() > MAX_FILE_SIZE {
+                eprintln!("Warning: Plan JSON exceeds size limit, skipping");
+            } else {
+                match serde_json::from_str::<Plan>(plan_json) {
+                    Ok(plan) => active_plan = Some(plan),
+                    Err(e) => {
+                        let sanitized = sanitize_error_message(&e.to_string());
+                        eprintln!("Warning: Could not parse plan: {}", sanitized);
+                    }
+                }
             }
             i += 2;
         } else if args[i] == "--trajectory" && i + 1 < args.len() {
             let traj_json = &args[i + 1];
-            match serde_json::from_str::<Vec<TrajectoryEntry>>(traj_json) {
-                Ok(entries) => trajectory_entries = entries,
-                Err(e) => eprintln!("Warning: Could not parse trajectory: {}", e),
+            // Limit JSON size to prevent DoS
+            if traj_json.len() > MAX_FILE_SIZE {
+                eprintln!("Warning: Trajectory JSON exceeds size limit, skipping");
+            } else {
+                match serde_json::from_str::<Vec<TrajectoryEntry>>(traj_json) {
+                    Ok(entries) => trajectory_entries = entries,
+                    Err(e) => {
+                        let sanitized = sanitize_error_message(&e.to_string());
+                        eprintln!("Warning: Could not parse trajectory: {}", sanitized);
+                    }
+                }
             }
             i += 2;
         } else {
@@ -71,7 +110,7 @@ fn main() {
     if let Some(plan) = &active_plan {
         state_obj.insert(
             "codified_plan".to_string(),
-            serde_json::to_value(plan).unwrap(),
+            serde_json::to_value(plan).unwrap_or_default(),
         );
         println!(
             "[PLAN] Active plan with {} steps persisted",
@@ -83,18 +122,20 @@ fn main() {
 
     if let Some(parent) = state_file.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
-            eprintln!("Error creating directory: {}", e);
+            let sanitized = sanitize_error_message(&e.to_string());
+            eprintln!("Error creating directory: {}", sanitized);
             std::process::exit(1);
         }
     }
 
     match fs::write(
         &state_file,
-        serde_json::to_string_pretty(&state_data).unwrap(),
+        serde_json::to_string_pretty(&state_data).unwrap_or_default(),
     ) {
         Ok(_) => println!("[STATE] Saved state to: {}", state_file.display()),
         Err(e) => {
-            eprintln!("Error saving state: {}", e);
+            let sanitized = sanitize_error_message(&e.to_string());
+            eprintln!("Error saving state: {}", sanitized);
             std::process::exit(1);
         }
     }
@@ -114,14 +155,21 @@ fn main() {
 
     if let Some(parent) = trajectory_path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
-            eprintln!("Warning: Could not create trajectory directory: {}", e);
+            let sanitized = sanitize_error_message(&e.to_string());
+            eprintln!(
+                "Warning: Could not create trajectory directory: {}",
+                sanitized
+            );
         } else {
             match fs::write(
                 &trajectory_path,
-                serde_json::to_string_pretty(&trajectory).unwrap(),
+                serde_json::to_string_pretty(&trajectory).unwrap_or_default(),
             ) {
                 Ok(_) => println!("[TRAJECTORY] Saved {} entries", trajectory.entries.len()),
-                Err(e) => eprintln!("Warning: Could not save trajectory: {}", e),
+                Err(e) => {
+                    let sanitized = sanitize_error_message(&e.to_string());
+                    eprintln!("Warning: Could not save trajectory: {}", sanitized);
+                }
             }
         }
     }
@@ -168,21 +216,23 @@ fn main() {
 
     if let Some(parent) = checkpoint_file.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
-            eprintln!("Error creating directory: {}", e);
+            let sanitized = sanitize_error_message(&e.to_string());
+            eprintln!("Error creating directory: {}", sanitized);
             std::process::exit(1);
         }
     }
 
     match fs::write(
         &checkpoint_file,
-        serde_json::to_string_pretty(&checkpoint_data).unwrap(),
+        serde_json::to_string_pretty(&checkpoint_data).unwrap_or_default(),
     ) {
         Ok(_) => println!(
             "[CHECKPOINT] Saved checkpoint to: {}",
             checkpoint_file.display()
         ),
         Err(e) => {
-            eprintln!("Error saving checkpoint: {}", e);
+            let sanitized = sanitize_error_message(&e.to_string());
+            eprintln!("Error saving checkpoint: {}", sanitized);
             std::process::exit(1);
         }
     }

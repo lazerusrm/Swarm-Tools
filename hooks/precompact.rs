@@ -5,7 +5,13 @@ use swarm_tools::codified_reasoning::CodifiedReasoning;
 use swarm_tools::enhanced_monitor::{EnhancedMonitor, TrajectoryCompression};
 use swarm_tools::loop_detector::LoopDetector;
 use swarm_tools::role_router::RoleRouter;
+use swarm_tools::security::{
+    sanitize_agent_id, sanitize_error_message, validate_filename, SecurityError,
+};
 use swarm_tools::types::{AgentRole, SwarmConfig, TrajectoryEntry, TrajectoryLog};
+
+const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10MB
+const MAX_PATH_LENGTH: usize = 4096;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -20,7 +26,10 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut agent_id = &args[1];
+    // Sanitize agent_id to prevent path traversal
+    let raw_agent_id = &args[1];
+    let agent_id = sanitize_agent_id(raw_agent_id);
+
     let prompt = &args[2];
     let state = if args.len() > 3 { &args[3] } else { "unknown" };
 
@@ -45,7 +54,7 @@ fn main() {
     let config = SwarmConfig::default();
     let mut detector = LoopDetector::new(&config);
 
-    match detector.check_all_loops(agent_id, prompt, state) {
+    match detector.check_all_loops(&agent_id, prompt, state) {
         Ok(Some(detection)) => {
             println!("{}", serde_json::to_string_pretty(&detection).unwrap());
             println!(
@@ -59,7 +68,8 @@ fn main() {
         }
         Ok(None) => {}
         Err(e) => {
-            eprintln!("Error checking for loops: {}", e);
+            let sanitized = sanitize_error_message(&e.to_string());
+            eprintln!("Error checking for loops: {}", sanitized);
             std::process::exit(1);
         }
     }
@@ -76,31 +86,60 @@ fn main() {
         if trajectory_path.exists() {
             match fs::read_to_string(&trajectory_path) {
                 Ok(content) => {
-                    let trajectory: TrajectoryLog = serde_json::from_str(&content).unwrap();
-
-                    if monitor.should_compress(
-                        context_pct,
-                        trajectory.entries.len(),
-                        trajectory.tokens_used as usize,
-                    ) {
-                        let compressed = monitor.compress_trajectory(&trajectory);
-
-                        println!("[COMPRESSION] Trajectory compressed");
-                        println!("  Original entries: {}", trajectory.entries.len());
-                        println!("  Preserved: {}", compressed.preserved.len());
-                        println!("  Summarized: {}", compressed.summarized.len());
-                        println!("  Compression ratio: {:.2}", compressed.compression_ratio);
-
-                        let compressed_path = trajectory_path
-                            .with_file_name(format!("{}_trajectory_compressed.json", agent_id));
-                        let _ = fs::write(
-                            &compressed_path,
-                            serde_json::to_string_pretty(&compressed).unwrap(),
+                    if content.len() > MAX_FILE_SIZE {
+                        eprintln!(
+                            "Warning: Trajectory file exceeds size limit, skipping compression"
                         );
+                    } else {
+                        match serde_json::from_str::<TrajectoryLog>(&content) {
+                            Ok(trajectory) => {
+                                if monitor.should_compress(
+                                    context_pct,
+                                    trajectory.entries.len(),
+                                    trajectory.tokens_used as usize,
+                                ) {
+                                    let compressed = monitor.compress_trajectory(&trajectory);
+
+                                    println!("[COMPRESSION] Trajectory compressed");
+                                    println!("  Original entries: {}", trajectory.entries.len());
+                                    println!("  Preserved: {}", compressed.preserved.len());
+                                    println!("  Summarized: {}", compressed.summarized.len());
+                                    println!(
+                                        "  Compression ratio: {:.2}",
+                                        compressed.compression_ratio
+                                    );
+
+                                    let sanitized_filename = validate_filename(&format!(
+                                        "{}_trajectory_compressed.json",
+                                        &agent_id
+                                    ))
+                                    .unwrap_or_else(|_| "compressed_trajectory.json".to_string());
+                                    let compressed_path =
+                                        trajectory_path.with_file_name(sanitized_filename);
+
+                                    if let Some(parent) = compressed_path.parent() {
+                                        if let Err(e) = fs::create_dir_all(parent) {
+                                            eprintln!("Warning: Could not create directory: {}", e);
+                                        } else {
+                                            let _ = fs::write(
+                                                &compressed_path,
+                                                serde_json::to_string_pretty(&compressed)
+                                                    .unwrap_or_default(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let sanitized = sanitize_error_message(&e.to_string());
+                                eprintln!("Warning: Could not parse trajectory: {}", sanitized);
+                            }
+                        }
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Could not read trajectory: {}", e);
+                    let sanitized = sanitize_error_message(&e.to_string());
+                    eprintln!("Warning: Could not read trajectory: {}", sanitized);
                 }
             }
         }

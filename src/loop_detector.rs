@@ -1,12 +1,14 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::semantic_engine::SemanticEngine;
 use crate::types::{LoopDetection, LoopType, Result};
 use hex::encode;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct LoopDetector {
     exact_loop_threshold: usize,
@@ -14,16 +16,40 @@ pub struct LoopDetector {
     state_oscillation_threshold: usize,
     semantic_similarity_threshold: f64,
     base_dir: PathBuf,
+    semantic_engine: Arc<SemanticEngine>,
+    use_semantic: bool,
 }
 
 impl LoopDetector {
     pub fn new(config: &crate::types::SwarmConfig) -> Self {
+        let semantic_engine = Arc::new(SemanticEngine::new());
+        let use_semantic = semantic_engine.is_loaded();
+
         Self {
             exact_loop_threshold: config.loop_exact_threshold,
             semantic_loop_threshold: config.loop_semantic_threshold,
             state_oscillation_threshold: config.loop_state_oscillation_threshold,
-            semantic_similarity_threshold: config.semantic_similarity_threshold,
+            semantic_similarity_threshold: 0.85,
             base_dir: PathBuf::from(".claude/swarm-tools"),
+            semantic_engine,
+            use_semantic,
+        }
+    }
+
+    pub fn with_semantic_engine(
+        config: &crate::types::SwarmConfig,
+        semantic_engine: Arc<SemanticEngine>,
+    ) -> Self {
+        let use_semantic = semantic_engine.is_loaded();
+
+        Self {
+            exact_loop_threshold: config.loop_exact_threshold,
+            semantic_loop_threshold: config.loop_semantic_threshold,
+            state_oscillation_threshold: config.loop_state_oscillation_threshold,
+            semantic_similarity_threshold: 0.85,
+            base_dir: PathBuf::from(".claude/swarm-tools"),
+            semantic_engine,
+            use_semantic,
         }
     }
 
@@ -123,7 +149,7 @@ impl LoopDetector {
         hashes.insert(prompt_hash.clone(), count + 1);
         self.save_hashes(agent_id, &hashes)?;
 
-        if count >= self.exact_loop_threshold {
+        if count + 1 >= self.exact_loop_threshold {
             Ok(Some(LoopDetection {
                 detection_type: LoopType::ExactLoop,
                 agent_id: agent_id.to_string(),
@@ -136,9 +162,39 @@ impl LoopDetector {
         }
     }
 
+    /// Semantic similarity using embedding cosine similarity
+    /// Falls back to Jaccard similarity if embeddings are not available
     fn semantic_similarity(&self, prompt1: &str, prompt2: &str) -> f64 {
-        let words1: std::collections::HashSet<&str> = prompt1.split_whitespace().collect();
-        let words2: std::collections::HashSet<&str> = prompt2.split_whitespace().collect();
+        if !self.use_semantic {
+            // Fallback to Jaccard similarity
+            self.jaccard_similarity(prompt1, prompt2)
+        } else {
+            // Use semantic embeddings
+            match self.semantic_engine.embed(prompt1) {
+                Ok(vec1) => match self.semantic_engine.embed(prompt2) {
+                    Ok(vec2) => {
+                        let similarity = self.semantic_engine.cosine_similarity(&vec1, &vec2);
+                        similarity as f64
+                    }
+                    Err(_) => self.jaccard_similarity(prompt1, prompt2),
+                },
+                Err(_) => self.jaccard_similarity(prompt1, prompt2),
+            }
+        }
+    }
+
+    /// Fallback Jaccard similarity for when embeddings are not available
+    fn jaccard_similarity(&self, prompt1: &str, prompt2: &str) -> f64 {
+        let words1: std::collections::HashSet<String> = prompt1
+            .to_lowercase()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+        let words2: std::collections::HashSet<String> = prompt2
+            .to_lowercase()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
 
         if words1.is_empty() || words2.is_empty() {
             return 0.0;
@@ -158,9 +214,11 @@ impl LoopDetector {
         let history = self.load_prompt_history(agent_id)?;
 
         let mut similarity_count = 0;
+        let threshold = self.semantic_similarity_threshold;
+
         for hist_prompt in history.iter().rev().take(self.semantic_loop_threshold) {
             let similarity = self.semantic_similarity(prompt, hist_prompt);
-            if similarity > self.semantic_similarity_threshold {
+            if similarity > threshold {
                 similarity_count += 1;
             }
         }
@@ -297,6 +355,14 @@ impl LoopDetector {
             state_oscillations,
         })
     }
+
+    pub fn is_using_semantic(&self) -> bool {
+        self.use_semantic
+    }
+
+    pub fn get_semantic_engine(&self) -> &Arc<SemanticEngine> {
+        &self.semantic_engine
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -305,4 +371,36 @@ pub struct InterventionStats {
     pub exact_loops: u64,
     pub semantic_loops: u64,
     pub state_oscillations: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_semantic_similarity_with_fallback() {
+        let config = crate::types::SwarmConfig::default();
+        let detector = LoopDetector::new(&config);
+
+        // Should use fallback when model is not loaded
+        assert!(!detector.is_using_semantic());
+
+        let similarity = detector.semantic_similarity("Analyze the code", "Code analysis");
+        assert!(similarity > 0.0);
+    }
+
+    #[test]
+    fn test_exact_loop_detection() {
+        let config = crate::types::SwarmConfig::default();
+        let mut detector = LoopDetector::new(&config);
+
+        let result = detector.check_exact_loop("agent1", "test prompt");
+        assert!(result.unwrap().is_none());
+
+        let result = detector.check_exact_loop("agent1", "test prompt");
+        assert!(result.unwrap().is_none());
+
+        let result = detector.check_exact_loop("agent1", "test prompt");
+        assert!(result.unwrap().is_some());
+    }
 }
