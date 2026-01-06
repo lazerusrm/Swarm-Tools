@@ -65,7 +65,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build-linux, build-windows, build-macos]
+    needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Download Linux binary
@@ -78,11 +78,6 @@ jobs:
         with:
           name: swarm-tools-windows
           path: release
-      - name: Download macOS binary
-        uses: actions/download-artifact@v4
-        with:
-          name: swarm-tools-macos
-          path: release
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -92,9 +87,14 @@ jobs:
 
             Multi-platform release with semantic embeddings and all performance optimizations.
 
+            ### Platforms
+            - **Linux**: ✓ Full semantic engine with BERT embeddings
+            - **Windows**: ✓ Full semantic engine with BERT embeddings
+            - **macOS**: Basic binary (semantic features pending CI fix)
+
             ### Semantic Task Routing (NEW)
             - **BERT embeddings**: ML-powered intelligent task-to-role routing
-            - **Cross-platform**: ONNX inference on Linux/macOS, runtime DLL on Windows
+            - **Cross-platform**: ONNX inference on Linux, runtime DLL on Windows
             - **Graceful fallback**: Tokenizer-based and TF-IDF embeddings
 
             ### Features
