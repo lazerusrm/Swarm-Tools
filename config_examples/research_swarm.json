@@ -1,0 +1,28 @@
+{
+  "mcp_routing": {
+    "enabled": true,
+    "role_tool_filters": {
+      "extractor": ["read_file", "git_diff", "grep", "browse_web", "fetch_url"],
+      "analyzer": ["browse_web", "search", "grep", "analyze", "fetch_url"],
+      "writer": ["write_file", "edit_file", "create"],
+      "reviewer": ["read_file", "check", "summarize"],
+      "synthesizer": ["browse_web", "search", "summarize", "fetch_url", "grep"]
+    },
+    "default_tools": ["message", "communication", "browse_web"]
+  },
+  "model_tiering": {
+    "enabled": true,
+    "simple_haiku_threshold": 1500,
+    "moderate_sonnet_threshold": 8000,
+    "fallback_model": "claude-opus-4-5-2025",
+    "high_impact_boost_enabled": true
+  },
+  "self_healing": {
+    "enabled": true,
+    "auto_prune_enabled": true,
+    "prune_threshold": 0.25,
+    "prune_over_turns": 3,
+    "auto_rebalance_on_prune": true,
+    "min_active_agents": 3
+  }
+}

@@ -50,6 +50,26 @@ impl AgentRole {
     }
 }
 
+impl std::str::FromStr for AgentRole {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "extractor" => Ok(AgentRole::Extractor),
+            "analyzer" => Ok(AgentRole::Analyzer),
+            "writer" => Ok(AgentRole::Writer),
+            "reviewer" => Ok(AgentRole::Reviewer),
+            "synthesizer" => Ok(AgentRole::Synthesizer),
+            "tester" => Ok(AgentRole::Tester),
+            "documenter" => Ok(AgentRole::Documenter),
+            "optimizer" => Ok(AgentRole::Optimizer),
+            "specialist" => Ok(AgentRole::Specialist),
+            "general" => Ok(AgentRole::General),
+            _ => Err(format!("Unknown agent role: {}", s)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ExecutionMode {
     Sequential,
