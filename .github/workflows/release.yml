@@ -20,10 +20,12 @@ jobs:
           target: x86_64-unknown-linux-gnu
       - name: Build release
         run: cargo build --release --target x86_64-unknown-linux-gnu --features semantic
-      - name: List artifacts
-        run: ls -la target/x86_64-unknown-linux-gnu/release/
+      - name: List build artifacts
+        run: |
+          ls -la target/x86_64-unknown-linux-gnu/release/ | head -20
+          file target/x86_64-unknown-linux-gnu/release/swarm-tools || echo "Binary not found"
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.1.2
         with:
           name: swarm-tools-linux
           path: target/x86_64-unknown-linux-gnu/release/swarm-tools
@@ -43,7 +45,7 @@ jobs:
       - name: List artifacts
         run: dir target\x86_64-pc-windows-msvc\release\
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.1.2
         with:
           name: swarm-tools-windows
           path: target/x86_64-pc-windows-msvc/release/swarm-tools.exe
@@ -55,12 +57,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Linux binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.2
         with:
           name: swarm-tools-linux
           path: release
       - name: Download Windows binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.2
         with:
           name: swarm-tools-windows
           path: release
