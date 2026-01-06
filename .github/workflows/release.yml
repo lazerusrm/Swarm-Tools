@@ -41,7 +41,7 @@ jobs:
       - name: Build release
         run: cargo build --release --target x86_64-pc-windows-msvc
       - name: Rename binary
-        run: mv target/x86_64-pc-windows-msvc/release/precompact.exe target/x86_64-pc-windows-msvc/release/swarm-tools.exe
+        run: Move-Item -Path target/x86_64-pc-windows-msvc/release/precompact.exe -Destination target/x86_64-pc-windows-msvc/release/swarm-tools.exe
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -96,7 +96,12 @@ jobs:
           generate_release_notes: |
             ## Swarm-Tools ${{ github.ref_name }}
 
-            Multi-platform release with all performance optimizations.
+            Multi-platform release with semantic embeddings and all performance optimizations.
+
+            ### Semantic Task Routing (NEW)
+            - **BERT embeddings**: ML-powered intelligent task-to-role routing
+            - **Cross-platform**: ONNX inference on Linux/macOS, runtime DLL on Windows
+            - **Graceful fallback**: Tokenizer-based and TF-IDF embeddings
 
             ### Features
             - **Role-Aware Routing**: Filter context per agent role (40-65% comms savings)
